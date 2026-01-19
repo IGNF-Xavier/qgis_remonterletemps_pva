@@ -39,4 +39,4 @@ Ce plugin QGIS permet de rechercher, prévisualiser et télécharger des **Photo
 
 ## 📜 Licence
 
-Le plugin est distribué sous les termes de la licence GPLv2+.
+Le plugin est distribué sous les termes de la licence GPL-3.0 license 
