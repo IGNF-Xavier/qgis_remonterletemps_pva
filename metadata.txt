@@ -1,0 +1,26 @@
+[general]
+name=GPF - Remonter le Temps PVA
+description=Recherche, visualisation et téléchargement de clichés aériens historiques (PVA) depuis la Géoplateforme IGN.
+about=Cette extension expérimentale permet d'explorer les archives photographiques de l'IGN. \n\nFonctionnalités :\n- Scan de l'emprise actuelle pour trouver des missions.\n- Visualisation des emprises des clichés via Vector Tiles (MVT).\n- Panier de téléchargement incrémental.\n- Téléchargement automatisé des fichiers TIF originaux.
+version=1.0
+qgisMinimumVersion=3.28
+qgisMaximumVersion=3.99
+author=Xavier THAUVIN
+email=geoplateforme@ign.fr
+changelog=1.0 : Première version stable avec panier incrémental
+
+# Mots-clés pour la recherche sur le dépôt QGIS
+tags=IGN, historique, PVA, photo aérienne, remontée dans le temps, France, téléchargement, geoplateforme, géoplateforme
+
+# Catégories standard :  Raster, Web, Database, etc.
+category=Web, Raster, Data, aerial
+
+
+# Compatibilité technique
+# QGIS 3.28+ utilise Python 3.9+ et Qt5 ou Qt6 selon les versions
+experimental=True
+deprecated=False
+
+# Spécification Qt6 (Optionnel mais recommandé pour les versions récentes)
+# Permet d'indiquer que l'extension a été testée sous Qt6
+server=False
