@@ -1,0 +1,27 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+
+# dependance installee a la demande dans l'extension
+remonter_le_temps/libs/
+
+# artefacts de build
+dist/
+build/
+*.zip
+
+# donnees de test / sorties
+chantiers/
+01_scans_bruts/
+02_cliches_decoupes/
+03_cliches_cales/
+*.tif
+*.jp2
+*.gpkg
+
+# editeurs
+.vscode/
+.idea/
+*.swp
+.DS_Store
