@@ -195,6 +195,12 @@ redirige ces flux vers le journal des messages de QGIS (*Vue → Panneaux →
 Journal des messages*, onglet « Remonter le temps »), où le message réel
 s'affiche.
 
+Cette erreur peut survenir **dès l'installation du ZIP**, avant toute
+utilisation : QGIS charge l'extension immédiatement, et celle-ci importe numpy
+et GDAL. Le conflit préexistait donc sur le poste ; l'extension n'a fait que le
+révéler. Depuis la 1.3.2, ce cas charge une extension de repli qui affiche le
+diagnostic au lieu d'une trace tronquée.
+
 La cause la plus fréquente est **deux copies de numpy** : celle de QGIS et une
 autre installée dans le site utilisateur
 (`%AppData%\Roaming\Python\Python3xx\site-packages`), qui passe en premier

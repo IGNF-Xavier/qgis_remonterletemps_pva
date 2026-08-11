@@ -243,6 +243,24 @@ def _module_locations(name):
     return found
 
 
+def check_numpy_abi():
+    """
+    Verifie que numpy et les extensions C qui en dependent s'entendent.
+    Retourne (ok, message).
+    """
+    try:
+        import numpy
+    except Exception as exc:  # noqa: BLE001
+        return False, u"numpy inutilisable : %s" % exc
+    try:
+        from osgeo import gdal_array  # noqa: F401
+    except Exception as exc:  # noqa: BLE001
+        return False, (u"Les bindings GDAL refusent numpy %s : %s\n"
+                       u"C'est la signature d'un conflit de versions."
+                       % (numpy.__version__, exc))
+    return True, u"numpy %s et GDAL s'entendent." % numpy.__version__
+
+
 def diagnose():
     """Rapport lisible sur l'environnement Python, pour le journal du panneau."""
     lines = [u"--- Diagnostic de l'environnement ---",
@@ -276,6 +294,9 @@ def diagnose():
                          u"reinstallez OpenCV.")
     else:
         lines.append(u"libs/ : absent")
+
+    ok, msg = check_numpy_abi()
+    lines.append((u"OK   " if ok else u"! ") + msg)
 
     for name in ("cv2", "osgeo"):
         locs = _module_locations(name)

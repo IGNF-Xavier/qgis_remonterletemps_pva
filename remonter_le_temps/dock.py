@@ -411,6 +411,11 @@ class RltDock(QDockWidget):
 
     def run_diagnostic(self):
         self.say(deps.diagnose())
+        ok, msg = deps.check_numpy_abi()
+        if not ok:
+            self.iface.messageBar().pushMessage(
+                u"Remonter le temps", msg.splitlines()[0],
+                level=Qgis.Critical, duration=12)
         self.tabs.setCurrentIndex(0)
 
     def uninstall_opencv(self):

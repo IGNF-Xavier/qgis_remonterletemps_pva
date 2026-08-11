@@ -3,6 +3,18 @@
 Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/) et le
 versionnement sémantique.
 
+## [1.3.2] - 2026-08-11
+
+### Corrigé
+- L'échec d'import de numpy ou de GDAL ne remonte plus une trace illisible :
+  une extension de repli se charge et affiche un diagnostic explicite avec la
+  marche à suivre. numpy et GDAL ne sont plus importés qu'après la
+  sécurisation des flux standards.
+
+### Ajouté
+- Contrôle de compatibilité numpy / bindings GDAL (`check_numpy_abi`), inclus
+  dans le rapport de diagnostic.
+
 ## [1.3.1] - 2026-08-11
 
 ### Corrigé
