@@ -509,7 +509,7 @@ class RltDock(QDockWidget):
         props.setdefault("image_identifier", ident)
         return props
 
-    def _make_layer(self, name, features, color, rlt_type):
+    def _make_layer(self, name, features, color, rlt_type, mission=None):
         """Couche memoire dont les champs sont deduits des donnees WFS."""
         keys, numeric = [], set()
         for gj in features[:200]:
@@ -547,8 +547,63 @@ class RltDock(QDockWidget):
         layer.renderer().setSymbol(QgsFillSymbol.createSimple({
             "color": "0,0,0,0", "outline_color": color, "outline_width": "0.5"}))
         layer.setCustomProperty("rlt_type", rlt_type)
-        QgsProject.instance().addMapLayer(layer)
+        self._add_layer(layer, mission)
         return layer
+
+    # ------------------------------------------------------- groupes de couches
+    ROOT_GROUP = u"Remonter le Temps"
+
+    def _group_for(self, mission=None):
+        """
+        Groupe de destination dans le gestionnaire de couches.
+
+        Tout ce qui concerne une mission va dans un sous-groupe eponyme, sous
+        un groupe racine commun. Sans mission (recherche sur emprise), on
+        s'arrete au groupe racine.
+        """
+        root = QgsProject.instance().layerTreeRoot()
+        parent = root.findGroup(self.ROOT_GROUP)
+        if parent is None:
+            parent = root.insertGroup(0, self.ROOT_GROUP)
+        if not mission:
+            return parent
+        group = parent.findGroup(mission)
+        if group is None:
+            group = parent.addGroup(mission)
+            # les missions deja traitees se replient pour garder l'arbre lisible
+            for other in parent.findGroups():
+                if other is not group:
+                    other.setExpanded(False)
+        return group
+
+    def _add_layer(self, layer, mission=None):
+        """Ajoute la couche au projet en la rangeant dans le bon groupe."""
+        project = QgsProject.instance()
+        try:
+            group = self._group_for(mission)
+            project.addMapLayer(layer, False)   # pas d'insertion a la racine
+            group.insertLayer(0, layer)
+        except Exception as exc:  # noqa: BLE001
+            # le regroupement ne doit jamais empecher la couche d'apparaitre
+            self.say(u"  (regroupement impossible : %s)" % exc)
+            project.addMapLayer(layer)
+        return layer
+
+    @staticmethod
+    def _mission_of_path(path):
+        """Retrouve la mission d'un raster produit, via son .json de metadonnees."""
+        img_id = os.path.splitext(os.path.basename(path))[0]
+        for suffix in ("_cale", "_ortho", "_apercu"):
+            if img_id.endswith(suffix):
+                img_id = img_id[:-len(suffix)]
+                break
+        base = os.path.dirname(os.path.dirname(path))
+        meta = os.path.join(base, "01_scans_bruts", "%s.json" % img_id)
+        try:
+            with open(meta, encoding="utf-8") as fh:
+                return json.load(fh).get("dataset_identifier")
+        except Exception:  # noqa: BLE001
+            return None
 
     def _find_layer(self, rlt_type):
         cur = self.iface.activeLayer()
@@ -620,7 +675,8 @@ class RltDock(QDockWidget):
         for lyr in list(QgsProject.instance().mapLayers().values()):
             if lyr.customProperty("rlt_type") == "emprise":
                 QgsProject.instance().removeMapLayer(lyr.id())
-        layer = self._make_layer(name, [gj], "227,26,28,255", "emprise")
+        layer = self._make_layer(name, [gj], "227,26,28,255", "emprise",
+                                 mission=dataset)
         layer.renderer().setSymbol(QgsFillSymbol.createSimple({
             "color": "227,26,28,25", "outline_color": "227,26,28,255",
             "outline_width": "1.2"}))
@@ -689,7 +745,7 @@ class RltDock(QDockWidget):
             self.say(u"  (etiquettes des centres desactivees : %s)" % exc)
 
         layer.setCustomProperty("rlt_type", "centres")
-        QgsProject.instance().addMapLayer(layer)
+        self._add_layer(layer, dataset)
         return layer
 
     def _cliches_done(self, task, dataset):
@@ -699,7 +755,7 @@ class RltDock(QDockWidget):
             self.say(u"Aucun cliche trouve.")
             return
         self._make_layer(u"PVA - Cliches %s" % (dataset or u"emprise"),
-                         feats, "0,120,255,255", "cliches")
+                         feats, "0,120,255,255", "cliches", mission=dataset)
         self._make_centres_layer(feats, dataset)
         self.say(u"%d cliche(s) affiche(s). Tracez un rectangle pour remplir "
                  u"le panier." % len(feats))
@@ -983,7 +1039,9 @@ class RltDock(QDockWidget):
         if not layer.isValid():
             self.say(u"Raster d'apercu invalide.")
             return
-        QgsProject.instance().addMapLayer(layer)
+        mission = (self._basket.get(ident, {}).get("props", {})
+                   .get("dataset_identifier"))
+        self._add_layer(layer, mission)
         self._previews[ident] = layer.id()
         self._apply_opacity(self.sld_opacity.value())
 
@@ -1068,7 +1126,7 @@ class RltDock(QDockWidget):
                 name = os.path.splitext(os.path.basename(path))[0]
                 layer = QgsRasterLayer(path, name)
                 if layer.isValid():
-                    QgsProject.instance().addMapLayer(layer)
+                    self._add_layer(layer, self._mission_of_path(path))
         self.iface.messageBar().pushMessage(
             u"Remonter le temps", u"%d cliche(s) cale(s)." % len(task.results),
             level=Qgis.Success, duration=6)

@@ -3,6 +3,15 @@
 Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/) et le
 versionnement sémantique.
 
+## [1.8.0] - 2026-08-11
+
+### Ajouté
+- Toutes les couches sont rangées dans un groupe **Remonter le Temps**, avec
+  un sous-groupe éponyme par mission : emprise, clichés, centres, aperçus et
+  rasters calés d'une même mission se retrouvent ensemble. La mission d'un
+  raster produit est retrouvée via son fichier `.json` de métadonnées.
+- Les groupes de missions précédentes se replient à l'ouverture d'une nouvelle.
+
 ## [1.7.0] - 2026-08-11
 
 ### Ajouté

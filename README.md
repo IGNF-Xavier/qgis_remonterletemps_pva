@@ -112,6 +112,11 @@ L'interface est en trois onglets : **Recherche**, **Panier**, **Traitement**.
 8. Onglet **Traitement** : mode de découpe, niveau de calage, CRS, résolution,
    dossier de sortie → **Télécharger et traiter les clichés cochés**.
 
+Dans le gestionnaire de couches, tout est rangé sous un groupe
+**Remonter le Temps**, avec un sous-groupe par mission : l'emprise, le tableau
+d'assemblage, les centres, les aperçus et les rasters calés d'une même mission
+restent ensemble.
+
 Sortie :
 
 ```
