@@ -184,6 +184,52 @@ def _to_gray_u8(path, max_size=2000):
     return arr, (w, h), (ow, oh), gt
 
 
+def make_detector():
+    """
+    Detecteur de points d'interet disponible dans la build d'OpenCV installee.
+
+    Toutes les distributions n'exposent pas AKAZE : certaines roues allegees
+    en sont depourvues. On prend le premier detecteur present, avec la norme
+    de distance qui lui correspond.
+    """
+    import cv2
+
+    for name, norm in (("AKAZE_create", cv2.NORM_HAMMING),
+                       ("ORB_create", cv2.NORM_HAMMING),
+                       ("BRISK_create", cv2.NORM_HAMMING),
+                       ("SIFT_create", cv2.NORM_L2),
+                       ("KAZE_create", cv2.NORM_L2)):
+        factory = getattr(cv2, name, None)
+        if factory is None:
+            continue
+        try:
+            det = factory(nfeatures=8000) if name == "ORB_create" else factory()
+        except Exception:  # noqa: BLE001
+            try:
+                det = factory()
+            except Exception:  # noqa: BLE001
+                continue
+        return det, norm, name.replace("_create", "")
+    raise RuntimeError(
+        u"Aucun detecteur de points d'interet dans cette version d'OpenCV "
+        u"(ni AKAZE, ni ORB, ni BRISK, ni SIFT).")
+
+
+def opencv_report():
+    """Description de la build d'OpenCV, pour le diagnostic."""
+    try:
+        import cv2
+    except Exception as exc:  # noqa: BLE001
+        return u"cv2 indisponible : %s" % exc
+    present = [n for n in ("AKAZE_create", "ORB_create", "BRISK_create",
+                           "SIFT_create", "KAZE_create")
+               if hasattr(cv2, n)]
+    return u"cv2 %s (%s) - detecteurs : %s" % (
+        getattr(cv2, "__version__", "?"),
+        os.path.dirname(getattr(cv2, "__file__", "?")),
+        u", ".join(p.replace("_create", "") for p in present) or u"aucun")
+
+
 def match_on_ortho(cliche_path, ortho_path, min_inliers=25, grid=5):
     """
     Cherche l'homographie cliche -> ortho de reference.
@@ -198,19 +244,27 @@ def match_on_ortho(cliche_path, ortho_path, min_inliers=25, grid=5):
     clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
     ref_e = clahe.apply(ref)
 
-    det = cv2.AKAZE_create()
+    det, norm, det_name = make_detector()
     kp_r, des_r = det.detectAndCompute(ref_e, None)
     if des_r is None or len(kp_r) < 50:
         return None
 
+    # AKAZE, ORB et consorts sont invariants a la rotation : on essaie d'abord
+    # l'image telle quelle et son miroir (certains scans sont retournes cote
+    # emulsion), et on ne deroule les quarts de tour qu'en cas d'echec.
     best = None
-    for steps in range(4):
-        rot = np.rot90(img, -steps).copy()
+    attempts = [(False, 0), (True, 0)] + [(m, k) for k in (1, 2, 3)
+                                          for m in (False, True)]
+    for mirror, steps in attempts:
+        if best is not None and best[0] >= 3 * min_inliers:
+            break
+        base = np.fliplr(img) if mirror else img
+        rot = np.rot90(base, -steps).copy()
         rot_e = clahe.apply(rot)
         kp_i, des_i = det.detectAndCompute(rot_e, None)
         if des_i is None or len(kp_i) < 50:
             continue
-        bf = cv2.BFMatcher(cv2.NORM_HAMMING)
+        bf = cv2.BFMatcher(norm)
         raw = bf.knnMatch(des_i, des_r, k=2)
         good = [m for m, n in (p for p in raw if len(p) == 2)
                 if m.distance < 0.75 * n.distance]
@@ -223,12 +277,12 @@ def match_on_ortho(cliche_path, ortho_path, min_inliers=25, grid=5):
             continue
         inl = int(mask.sum())
         if inl >= min_inliers and (best is None or inl > best[0]):
-            best = (inl, steps, H, rot.shape)
+            best = (inl, steps, H, rot.shape, mirror)
 
     if best is None:
         return None
 
-    inl, steps, H, (rh_s, rw_s) = best
+    inl, steps, H, (rh_s, rw_s), mirror = best
 
     # grille reguliere dans le cliche tourne -> ortho -> terrain
     us = np.linspace(0.08, 0.92, grid) * rw_s
@@ -251,6 +305,8 @@ def match_on_ortho(cliche_path, ortho_path, min_inliers=25, grid=5):
             cu, cv_ = (rw_s - 1 - u), (rh_s - 1 - v)
         else:
             cu, cv_ = (rh_s - 1 - v), u
+        if mirror:
+            cu = siw - 1 - cu
         img_xy.append((cu * sx, cv_ * sy))
         X = gt[0] + (pu * rsx) * gt[1] + (pv * rsy) * gt[2]
         Y = gt[3] + (pu * rsx) * gt[4] + (pv * rsy) * gt[5]
@@ -258,7 +314,7 @@ def match_on_ortho(cliche_path, ortho_path, min_inliers=25, grid=5):
 
     if len(img_xy) < 6:
         return None
-    return img_xy, gnd_xy, inl, steps
+    return img_xy, gnd_xy, inl, steps, det_name, mirror
 
 
 # ==========================================================================

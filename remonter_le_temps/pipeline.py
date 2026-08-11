@@ -129,6 +129,16 @@ def _centre_of(props, ring3857, out_crs):
     return georef.transform_points([centre], "EPSG:3857", out_crs)[0]
 
 
+def _gsd_from_footprint(ground, img_size):
+    """Taille pixel au sol impliquee par l'emprise du tableau d'assemblage."""
+    diag_img = math.hypot(img_size[0], img_size[1])
+    diag_gnd = max(math.hypot(a[0] - b[0], a[1] - b[1])
+                   for a in ground for b in ground)
+    if diag_img <= 0 or diag_gnd <= 0:
+        return None
+    return diag_gnd / diag_img
+
+
 def _metric_gcps(props, pitch_m, decim, img_size, full_size, crop_offset,
                  centre, ground, opt, feedback=None):
     """
@@ -138,18 +148,31 @@ def _metric_gcps(props, pitch_m, decim, img_size, full_size, crop_offset,
     if not opt.use_metric:
         return None
     if pitch_m is None:
-        _log(feedback, u"  pas de numerisation absent des tags TIFF")
-        return None
+        _log(feedback, u"  pas de numerisation absent des tags TIFF, "
+                       u"echelle deduite de l'emprise")
     scale = _scale_of(props)
+    gsd_from_footprint = None
     if not scale:
-        _log(feedback, u"  echelle absente des metadonnees")
-        return None
+        # L'echelle n'est pas toujours diffusee dans le WFS. On la remplace par
+        # celle qu'implique l'emprise : c'est moins rigoureux, mais on conserve
+        # l'essentiel, a savoir le centre et l'angle d'orientation continu,
+        # au lieu de retomber sur un ajustement des 4 coins.
+        gsd_from_footprint = _gsd_from_footprint(ground, img_size)
+        if gsd_from_footprint is None:
+            _log(feedback, u"  echelle absente et emprise inexploitable")
+            return None
+        _log(feedback, u"  echelle absente : deduite de l'emprise "
+                       u"(%.3f m/px, soit environ 1/%d)"
+             % (gsd_from_footprint,
+                round(gsd_from_footprint / (pitch_m * decim))
+                if pitch_m else 0))
 
-    mm, std, err = georef.plate_format_mm(pitch_m * decim, full_size)
-    _log(feedback, u"  scan %.1f um -> plaque %.0fx%.0f mm (format %dx%d)"
-         % (pitch_m * 1e6, mm[0], mm[1], std[0], std[1]))
-    if err > 0.15:
-        _log(feedback, u"  ! format non standard, calage metrique suspect")
+    if pitch_m:
+        mm, std, err = georef.plate_format_mm(pitch_m * decim, full_size)
+        _log(feedback, u"  scan %.1f um -> plaque %.0fx%.0f mm (format %dx%d)"
+             % (pitch_m * 1e6, mm[0], mm[1], std[0], std[1]))
+        if err > 0.15:
+            _log(feedback, u"  ! format non standard, calage metrique suspect")
 
     orient = _orientation_of(props)
     north, note = georef.resolve_north_angle(
@@ -159,8 +182,11 @@ def _metric_gcps(props, pitch_m, decim, img_size, full_size, crop_offset,
     if north is None:
         return None
 
-    gsd = pitch_m * decim * scale
-    _log(feedback, u"  echelle 1/%d -> %.3f m/px au sol" % (round(scale), gsd))
+    if scale:
+        gsd = pitch_m * decim * scale
+        _log(feedback, u"  echelle 1/%d -> %.3f m/px au sol" % (round(scale), gsd))
+    else:
+        gsd = gsd_from_footprint
     gcps = georef.gcps_from_metric(img_size, centre, gsd, north,
                                    crop_offset, full_size)
 
@@ -396,12 +422,19 @@ def process_cliche(props, ring3857, opt, feedback=None, is_canceled=None):
     if is_canceled and is_canceled():
         return None
 
-    if use_cv2:
-        _log(feedback, u"  recherche de points d'appui (AKAZE + RANSAC)...")
-        match = georef.match_on_ortho(cropped, ortho)
-    else:
-        _log(feedback, u"  recherche de points d'appui (correlation de phase)...")
-        match = georef.match_on_ortho_fft(dest, ortho, gcps)
+    try:
+        if use_cv2:
+            _log(feedback, u"  recherche de points d'appui (%s + RANSAC)..."
+                 % georef.make_detector()[2])
+            match = georef.match_on_ortho(cropped, ortho)
+        else:
+            _log(feedback, u"  recherche de points d'appui (correlation de "
+                           u"phase)...")
+            match = georef.match_on_ortho_fft(dest, ortho, gcps)
+    except Exception as exc:  # noqa: BLE001
+        _log(feedback, u"  ! appariement impossible (%s), calage de niveau 1 "
+                       u"conserve." % exc)
+        match = None
 
     if match is None:
         _log(feedback, u"  ! aucun appariement fiable, calage sur emprise conserve.")
@@ -409,11 +442,13 @@ def process_cliche(props, ring3857, opt, feedback=None, is_canceled=None):
             georef.build_overviews(dest)
         return dest
 
-    img_xy, gnd_xy, inliers, steps = match
     if use_cv2:
-        _log(feedback, u"  %d points d'appui (%d inliers, rotation %d degres)"
-             % (len(img_xy), inliers, steps * 90))
+        img_xy, gnd_xy, inliers, steps, det_name, mirror = match
+        _log(feedback, u"  %d points d'appui %s (%d inliers, rotation %d deg%s)"
+             % (len(img_xy), det_name, inliers, steps * 90,
+                u", scan en miroir" if mirror else u""))
     else:
+        img_xy, gnd_xy, inliers, steps = match[:4]
         _log(feedback, u"  %d points d'appui (tuiles correlees)" % len(img_xy))
 
     order = 2 if len(img_xy) >= 12 else 1
@@ -485,7 +520,8 @@ def process_cliche(props, ring3857, opt, feedback=None, is_canceled=None):
     try:
         georef.orthorectify(cropped, dem, P, ortho_dest, res, bounds, opt.out_crs)
     except Exception as exc:  # noqa: BLE001
-        _log(feedback, u"  ! echec de l'orthorectification (%s)" % exc)
+        _log(feedback, u"  ! echec de l'orthorectification (%s), calage 2D "
+                       u"conserve." % exc)
         return dest
 
     if opt.build_ovr:

@@ -6,7 +6,7 @@ import os
 import traceback
 
 from qgis.PyQt.QtCore import QUrl, pyqtSignal
-from qgis.PyQt.QtGui import QDesktopServices
+from qgis.PyQt.QtGui import QColor, QDesktopServices
 from qgis.PyQt.QtWidgets import (
     QCheckBox, QComboBox, QDockWidget, QDoubleSpinBox, QFormLayout, QGroupBox,
     QHBoxLayout, QLabel, QMessageBox, QProgressBar, QPlainTextEdit,
@@ -17,7 +17,8 @@ from qgis.core import (
     Qgis, QgsCoordinateReferenceSystem, QgsCoordinateTransform, QgsFeature,
     QgsFillSymbol, QgsGeometry, QgsMarkerSymbol, QgsPalLayerSettings,
     QgsPointXY, QgsProject, QgsRasterLayer, QgsRectangle, QgsTask,
-    QgsTextFormat, QgsApplication, QgsVectorLayer, QgsVectorLayerSimpleLabeling)
+    QgsTextBufferSettings, QgsTextFormat, QgsApplication, QgsVectorLayer,
+    QgsVectorLayerSimpleLabeling)
 from qgis.gui import QgsFileWidget, QgsMapToolExtent, QgsProjectionSelectionWidget
 
 from . import deps, ign_api, pipeline
@@ -616,13 +617,30 @@ class RltDock(QDockWidget):
         layer.dataProvider().addFeatures(rows)
         layer.updateExtents()
         layer.renderer().setSymbol(QgsMarkerSymbol.createSimple({
-            "name": "cross_fill", "color": "255,255,255,255",
-            "outline_color": "20,20,20,255", "size": "2.4"}))
+            "name": "circle", "color": "255,235,0,255",
+            "outline_color": "0,0,0,255", "outline_width": "0.4",
+            "size": "3.4"}))
 
         settings = QgsPalLayerSettings()
         settings.fieldName = "numero"
+        settings.placement = QgsPalLayerSettings.OverPoint
+        try:
+            settings.quadOffset = QgsPalLayerSettings.QuadrantAboveRight
+            settings.yOffset = 1.5
+            settings.xOffset = 1.5
+        except AttributeError:
+            pass
         fmt = QgsTextFormat()
-        fmt.setSize(8)
+        fmt.setSize(11)
+        font = fmt.font()
+        font.setBold(True)
+        fmt.setFont(font)
+        fmt.setColor(QColor(0, 0, 0))
+        buf = QgsTextBufferSettings()
+        buf.setEnabled(True)
+        buf.setSize(1.2)
+        buf.setColor(QColor(255, 255, 255))
+        fmt.setBuffer(buf)
         settings.setFormat(fmt)
         layer.setLabeling(QgsVectorLayerSimpleLabeling(settings))
         layer.setLabelsEnabled(True)

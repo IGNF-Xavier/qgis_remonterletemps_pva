@@ -3,6 +3,30 @@
 Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/) et le
 versionnement sémantique.
 
+## [1.5.0] - 2026-08-11
+
+### Corrigé
+- **Un échec du recalage ne fait plus perdre le cliché.** Une erreur au niveau
+  2 ou 3 renvoyait l'exception jusqu'à la tâche, qui abandonnait le cliché :
+  « 0 raster produit » alors que le calage de niveau 1 existait déjà. Les
+  raffinements sont désormais isolés et le meilleur résultat obtenu est
+  conservé.
+- **`cv2` sans `AKAZE_create`** : certaines roues d'OpenCV n'embarquent pas
+  AKAZE. Le détecteur est choisi parmi AKAZE, ORB, BRISK, SIFT et KAZE selon
+  ce qui est réellement disponible, avec la norme de distance correspondante.
+- **Échelle absente du WFS** : au lieu de retomber sur l'ajustement des quatre
+  coins, l'échelle est déduite de l'emprise et le calage conserve le centre du
+  cliché et l'angle d'orientation **continu** (272° et non 90° arrondi).
+
+### Ajouté
+- Détection des scans **en miroir** : le recalage teste l'image et son
+  symétrique, et signale le cas dans le journal.
+- Rapport OpenCV dans le diagnostic (version, chemin, détecteurs présents).
+
+### Modifié
+- Centres des clichés en pastilles jaunes cerclées de noir, numéros en gras
+  avec halo blanc.
+
 ## [1.4.0] - 2026-08-11
 
 ### Corrigé

@@ -301,6 +301,11 @@ def diagnose():
     for name in ("cv2", "osgeo"):
         locs = _module_locations(name)
         lines.append(u"%s : %s" % (name, locs[0] if locs else u"absent"))
+    try:
+        from .georef import opencv_report
+        lines.append(opencv_report())
+    except Exception as exc:  # noqa: BLE001
+        lines.append(u"OpenCV : rapport indisponible (%s)" % exc)
 
     user_site = [p for p in sys.path
                  if "Roaming" in p and "site-packages" in p]
