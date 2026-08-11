@@ -3,6 +3,20 @@
 Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/) et le
 versionnement sémantique.
 
+## [1.3.0] - 2026-08-11
+
+### Ajouté
+- **Calage métrique** : la taille pixel au sol est déduite des tags TIFF de
+  résolution du scan (avec gestion de `ResolutionUnit` pouce/centimètre) et de
+  l'échelle du cliché, au lieu d'être estimée sur l'emprise approximative.
+  L'image est posée sur son centre, orientée par l'angle du nord.
+- Contrôle du format de plaque déduit (24×18, 18×18, 23×23…) : un format non
+  standard signale une métadonnée douteuse.
+- Levée automatique de l'ambiguïté de convention sur l'angle d'orientation, en
+  confrontant l'attribut IGN à l'orientation grossière de l'emprise.
+- Prise en compte du décalage de découpe : le point principal reste au centre
+  du scan brut même si le rognage est asymétrique.
+
 ## [1.2.0] - 2026-08-11
 
 ### Ajouté

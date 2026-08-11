@@ -331,6 +331,14 @@ class RltDock(QDockWidget):
         self.spn_res.setSuffix(u" m/px")
         f2.addRow(u"Resolution", self.spn_res)
 
+        self.chk_metric = QCheckBox(u"Calage metrique (pas de scan x echelle)")
+        self.chk_metric.setChecked(True)
+        self.chk_metric.setToolTip(
+            u"Deduit la taille pixel au sol des tags de resolution du scan et "
+            u"de l'echelle du cliche, et place l'image sur son centre plutot "
+            u"que sur l'emprise approximative du tableau d'assemblage.")
+        f2.addRow(self.chk_metric)
+
         self.chk_orient = QCheckBox(u"Utiliser l'orientation du nord de l'IGN")
         self.chk_orient.setChecked(True)
         self.chk_orient.setToolTip(
@@ -781,6 +789,7 @@ class RltDock(QDockWidget):
         opt.resolution = self.spn_res.value()
         opt.rotation_steps = self.spn_rot.value()
         opt.write_json = self.chk_json.isChecked()
+        opt.use_metric = self.chk_metric.isChecked()
         opt.use_orientation = self.chk_orient.isChecked()
         opt.invert_orientation = self.chk_orient_inv.isChecked()
         return opt

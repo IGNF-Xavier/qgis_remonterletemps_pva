@@ -108,11 +108,26 @@ Le mode *marge fixe* est là pour les cas atypiques.
 
 ## Les trois niveaux de calage
 
-**Niveau 1 — emprise IGN.** Les 4 coins du cliché découpé sont ajustés sur les
-4 sommets de l'emprise du tableau d'assemblage. L'attribut *orientation du
-nord* fourni par l'IGN détermine lequel des quatre quarts de tour appliquer —
-c'est mesuré, pas deviné. Si la convention d'angle diffère, une case
-*Inverser le sens de l'orientation* corrige le tir. L'image est correctement
+**Niveau 1 — géométrie de prise de vue (calage métrique).** Plutôt que d'étirer
+le cliché sur l'emprise approximative du tableau d'assemblage, le plugin
+reconstruit la transformation :
+
+- le **pas de numérisation** vient des tags TIFF du scan
+  (`XResolution` + `ResolutionUnit`, en gérant le cas pouce et le cas
+  centimètre) : 721 ppp donnent 35,2 µm ;
+- multiplié par la **largeur en pixels**, il donne le format de plaque, qui est
+  confronté aux formats normalisés (24×18, 18×18, 23×23…) — un écart signale
+  une métadonnée douteuse ;
+- multiplié par l'**échelle** du cliché, il donne la taille pixel au sol :
+  35,2 µm × 11361 = 0,400 m/px ;
+- le **centre** du cliché fixe la position, l'**angle du nord** fixe la
+  rotation, et le décalage de découpe est pris en compte pour que le point
+  principal reste au centre du scan brut.
+
+La convention de signe de l'angle n'étant documentée nulle part, elle est levée
+automatiquement en confrontant l'attribut à l'orientation grossière de
+l'emprise. Si une pièce manque (tag de résolution absent, échelle non fournie),
+le plugin retombe sur l'ajustement des 4 coins sur l'emprise IGN. L'image est correctement
 orientée et à la bonne échelle, mais l'emprise IGN est elle-même approximative
 (les PVA sont documentées comme « approximativement placées ») : compter
 plusieurs dizaines de mètres d'écart. Instantané, aucune donnée externe.

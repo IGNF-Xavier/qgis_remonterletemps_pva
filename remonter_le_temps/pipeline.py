@@ -38,6 +38,7 @@ class Options(object):
         self.write_json = True
         self.use_orientation = True   # exploite l'attribut d'orientation IGN
         self.invert_orientation = False
+        self.use_metric = True        # calage par pas de scan + echelle + centre
 
 
 def _log(feedback, msg):
@@ -84,6 +85,85 @@ def _orientation_of(props):
             except (TypeError, ValueError):
                 continue
     return None
+
+
+SCALE_KEYS = ("echelle", "echelle_cliche", "scale", "denominateur_echelle")
+CENTRE_KEYS = (("x", "y"), ("centre_x", "centre_y"), ("lon", "lat"))
+
+
+def _scale_of(props):
+    """Denominateur d'echelle du cliche (11361 pour 1/11361)."""
+    for key in SCALE_KEYS:
+        val = props.get(key)
+        if val in (None, ""):
+            continue
+        try:
+            if isinstance(val, str) and "/" in val:
+                num, den = val.split("/", 1)
+                num = float(num.strip().replace("1", "1", 1))
+                return float(den.strip()) / (num or 1.0)
+            num = float(val)
+        except (TypeError, ValueError):
+            continue
+        if num <= 0:
+            continue
+        return 1.0 / num if num < 1.0 else num
+    return None
+
+
+def _centre_of(props, ring3857, out_crs):
+    """Centre du cliche dans le CRS de sortie."""
+    for kx, ky in CENTRE_KEYS:
+        vx, vy = props.get(kx), props.get(ky)
+        if vx in (None, "") or vy in (None, ""):
+            continue
+        try:
+            x, y = float(vx), float(vy)
+        except (TypeError, ValueError):
+            continue
+        src = "EPSG:4326" if abs(x) <= 180 and abs(y) <= 90 else "EPSG:3857"
+        return georef.transform_points([(x, y)], src, out_crs)[0]
+    xs = [p[0] for p in ring3857[:-1]] or [p[0] for p in ring3857]
+    ys = [p[1] for p in ring3857[:-1]] or [p[1] for p in ring3857]
+    centre = (sum(xs) / len(xs), sum(ys) / len(ys))
+    return georef.transform_points([centre], "EPSG:3857", out_crs)[0]
+
+
+def _metric_gcps(props, pitch_m, decim, img_size, full_size, crop_offset,
+                 centre, ground, opt, feedback=None):
+    """
+    Calage deduit de la geometrie de prise de vue. Retourne (gcps, gsd) ou None
+    si une piece manque, auquel cas l'appelant retombe sur l'emprise IGN.
+    """
+    if not opt.use_metric:
+        return None
+    if pitch_m is None:
+        _log(feedback, u"  pas de numerisation absent des tags TIFF")
+        return None
+    scale = _scale_of(props)
+    if not scale:
+        _log(feedback, u"  echelle absente des metadonnees")
+        return None
+
+    mm, std, err = georef.plate_format_mm(pitch_m * decim, full_size)
+    _log(feedback, u"  scan %.1f um -> plaque %.0fx%.0f mm (format %dx%d)"
+         % (pitch_m * 1e6, mm[0], mm[1], std[0], std[1]))
+    if err > 0.15:
+        _log(feedback, u"  ! format non standard, calage metrique suspect")
+
+    orient = _orientation_of(props)
+    north, note = georef.resolve_north_angle(
+        -orient if (orient is not None and opt.invert_orientation) else orient,
+        img_size, ground)
+    _log(feedback, u"  %s" % note)
+    if north is None:
+        return None
+
+    gsd = pitch_m * decim * scale
+    _log(feedback, u"  echelle 1/%d -> %.3f m/px au sol" % (round(scale), gsd))
+    gcps = georef.gcps_from_metric(img_size, centre, gsd, north,
+                                   crop_offset, full_size)
+    return gcps, gsd
 
 
 def _rotation_steps(props, img_size, ground, opt, feedback=None):
@@ -134,7 +214,13 @@ def make_preview(props, ring3857, opt, max_size=1600, feedback=None):
     gdal.Translate(small, src, options=gdal.TranslateOptions(
         width=ow, height=oh, format="GTiff",
         creationOptions=["COMPRESS=DEFLATE", "TILED=YES"]))
+    # les tags de resolution sont portes par le fichier distant : on les lit
+    # avant de fermer le dataset, la version decimee ne les conserve pas
+    pitch_remote, _dpi = georef.scan_pitch_ds(src)
     src = None
+    scale_factor = float(w) / float(ow)
+    prev_full = (ow, oh)
+    crop_offset = (0, 0)
 
     if opt.crop_mode != CROP_NONE:
         box = (crop_mod.detect_content_box(small, margin_pct=opt.crop_margin)
@@ -143,14 +229,21 @@ def make_preview(props, ring3857, opt, max_size=1600, feedback=None):
         cut = os.path.join(tmp_dir, "%s_apercu_crop.tif" % img_id)
         crop_mod.crop_to_file(small, cut, box)
         small = cut
+        crop_offset = (box[0], box[1])
 
     img_size = georef.raster_size(small)
     rect = georef.order_corners_cw(georef.min_area_rect(ring3857))
     ground = georef.transform_points(rect, "EPSG:3857", opt.out_crs)
-    res = _auto_resolution(ground, img_size)
+    centre = _centre_of(props, ring3857, opt.out_crs)
 
-    steps = _rotation_steps(props, img_size, ground, opt, feedback)
-    gcps = georef.gcps_from_footprint(img_size, ground, steps)
+    metric = _metric_gcps(props, pitch_remote, scale_factor, img_size, prev_full,
+                          crop_offset, centre, ground, opt, feedback)
+    if metric is not None:
+        gcps, res = metric
+    else:
+        res = _auto_resolution(ground, img_size)
+        steps = _rotation_steps(props, img_size, ground, opt, feedback)
+        gcps = georef.gcps_from_footprint(img_size, ground, steps)
     dest = os.path.join(tmp_dir, "%s_apercu.tif" % img_id)
     georef.warp_with_gcps(small, dest, gcps, opt.out_crs, opt.out_crs,
                           res=res, order=1)
@@ -196,6 +289,7 @@ def process_cliche(props, ring3857, opt, feedback=None, is_canceled=None):
         return None
 
     # ---- 2. decoupe du cadre ------------------------------------------
+    crop_offset = (0, 0)
     if opt.crop_mode == CROP_NONE:
         cropped = raw
     else:
@@ -206,21 +300,32 @@ def process_cliche(props, ring3857, opt, feedback=None, is_canceled=None):
         cropped = os.path.join(crop_dir, "%s_crop.tif" % img_id)
         _log(feedback, u"  decoupe du cadre : %s" % (box,))
         crop_mod.crop_to_file(raw, cropped, box)
+        crop_offset = (box[0], box[1])
     if is_canceled and is_canceled():
         return None
 
     img_size = georef.raster_size(cropped)
+    full_size = georef.raster_size(raw)
 
     # ---- 3. emprise IGN -> CRS de sortie -------------------------------
     rect = georef.min_area_rect(ring3857)
     rect = georef.order_corners_cw(rect)
     ground = georef.transform_points(rect, "EPSG:3857", opt.out_crs)
-    res = opt.resolution or _auto_resolution(ground, img_size)
+    centre = _centre_of(props, ring3857, opt.out_crs)
 
-    # ---- 4. niveau 1 : calage sur l'emprise ---------------------------
-    steps = _rotation_steps(props, img_size, ground, opt, feedback)
-    gcps = georef.gcps_from_footprint(img_size, ground, steps)
-    _log(feedback, u"  calage sur l'emprise IGN (%.2f m/px)" % res)
+    # ---- 4. niveau 1 : geometrie de prise de vue, sinon emprise --------
+    pitch, dpi = georef.scan_pitch(raw)
+    metric = _metric_gcps(props, pitch, 1.0, img_size, full_size, crop_offset,
+                          centre, ground, opt, feedback)
+    if metric is not None:
+        gcps, gsd = metric
+        res = opt.resolution or round(gsd, 3)
+        _log(feedback, u"  calage metrique (%.3f m/px)" % res)
+    else:
+        res = opt.resolution or _auto_resolution(ground, img_size)
+        steps = _rotation_steps(props, img_size, ground, opt, feedback)
+        gcps = georef.gcps_from_footprint(img_size, ground, steps)
+        _log(feedback, u"  calage sur l'emprise IGN (%.2f m/px)" % res)
     georef.warp_with_gcps(cropped, dest, gcps, opt.out_crs, opt.out_crs,
                           res=res, order=1)
     if opt.level == LEVEL_FOOTPRINT:

@@ -617,3 +617,140 @@ def rotation_from_orientation(img_size, ground_corners_cw, orientation_deg,
         if best_err is None or err < best_err:
             best, best_err = k, err
     return best, best_err
+
+
+# ==========================================================================
+# calage metrique : pas de numerisation + echelle + centre + orientation
+# ==========================================================================
+STANDARD_PLATES_MM = ((240, 180), (180, 180), (230, 230), (240, 240),
+                      (300, 300), (140, 140))
+
+
+def scan_pitch_ds(ds):
+    """
+    Pas de numerisation du scan, en metres sur le film, deduit des tags TIFF.
+
+    Retourne (pitch_m, dpi) ou (None, None). La subtilite est l'unite :
+    ResolutionUnit vaut 2 pour pouce et 3 pour centimetre, et il faut donc
+    convertir avant d'en tirer des microns.
+    """
+    if ds is None:
+        return None, None
+    xres = ds.GetMetadataItem("TIFFTAG_XRESOLUTION")
+    unit = ds.GetMetadataItem("TIFFTAG_RESOLUTIONUNIT")
+    if not xres:
+        return None, None
+    try:
+        value = float(xres)
+    except (TypeError, ValueError):
+        return None, None
+    code = 2
+    if unit:
+        digits = "".join(c for c in str(unit).strip() if c.isdigit())
+        if digits:
+            code = int(digits[0])
+    if code == 3:            # pixels par centimetre
+        dpi = value * 2.54
+    elif code == 2:          # pixels par pouce
+        dpi = value
+    else:
+        return None, None
+    if dpi <= 0:
+        return None, None
+    return 0.0254 / dpi, dpi
+
+
+def scan_pitch(path):
+    """Idem scan_pitch_ds, a partir d'un chemin (ou d'une URL /vsicurl/)."""
+    try:
+        return scan_pitch_ds(gdal.Open(path))
+    except Exception:  # noqa: BLE001
+        return None, None
+
+
+def plate_format_mm(pitch_m, img_size):
+    """Dimensions du cliche sur le film, en mm, et format normalise le plus proche."""
+    w_mm = img_size[0] * pitch_m * 1000.0
+    h_mm = img_size[1] * pitch_m * 1000.0
+    best, best_err = None, None
+    for std in STANDARD_PLATES_MM:
+        for a, b in ((std[0], std[1]), (std[1], std[0])):
+            err = abs(w_mm - a) / a + abs(h_mm - b) / b
+            if best_err is None or err < best_err:
+                best, best_err = (a, b), err
+    return (w_mm, h_mm), best, best_err
+
+
+def north_vectors(north_deg):
+    """
+    Vecteurs terrain des axes image, pour un nord situe a `north_deg` degres
+    du haut du cliche, positif dans le sens horaire (convention RLT).
+    """
+    a = math.radians(north_deg)
+    right = (math.cos(a), math.sin(a))     # axe des colonnes
+    up = (-math.sin(a), math.cos(a))       # axe des lignes, vers le haut
+    return right, up
+
+
+def gcps_from_metric(img_size, centre_ground, gsd, north_deg,
+                     crop_offset=(0, 0), full_size=None):
+    """
+    Points de calage deduits de la geometrie de la prise de vue plutot que de
+    l'emprise approximative du tableau d'assemblage.
+
+    img_size     : taille du cliche decoupe (px)
+    centre_ground: centre du cliche dans le CRS de sortie
+    gsd          : taille pixel au sol (m), = pas de numerisation x echelle
+    north_deg    : orientation du nord dans le repere image
+    crop_offset  : origine de la decoupe dans le scan brut
+    full_size    : taille du scan brut, pour situer le point principal
+    """
+    right, up = north_vectors(north_deg)
+    full = full_size or img_size
+    # point principal suppose au centre du scan brut, exprime en pixels decoupes
+    cu = full[0] / 2.0 - crop_offset[0]
+    cv = full[1] / 2.0 - crop_offset[1]
+
+    w, h = img_size
+    gcps = []
+    for (u, v) in ((0.5, 0.5), (w - 0.5, 0.5), (w - 0.5, h - 0.5), (0.5, h - 0.5),
+                   (w / 2.0, h / 2.0)):
+        du = (u - cu) * gsd
+        dv = (cv - v) * gsd          # lignes vers le bas
+        X = centre_ground[0] + du * right[0] + dv * up[0]
+        Y = centre_ground[1] + du * right[1] + dv * up[1]
+        gcps.append(gdal.GCP(X, Y, 0.0, u, v))
+    return gcps
+
+
+def resolve_north_angle(orientation_deg, img_size, ground_corners_cw):
+    """
+    Angle du nord a utiliser, en levant l'ambiguite de convention.
+
+    L'emprise du tableau d'assemblage donne une orientation grossiere mais sans
+    ambiguite ; l'attribut IGN donne la valeur precise mais dans une convention
+    que rien ne documente. On confronte les deux : si l'attribut colle mieux
+    une fois son signe inverse, c'est que la convention est l'inverse, et on le
+    signale au lieu de le deviner.
+    """
+    coarse = [north_angle_of_fit(img_size, ground_corners_cw, k) for k in range(4)]
+    coarse = [c for c in coarse if c is not None]
+    if not coarse:
+        return None, u"emprise inexploitable"
+    try:
+        attr = float(orientation_deg)
+    except (TypeError, ValueError):
+        return None, u"pas d'orientation fournie"
+
+    def closest(value):
+        return min(abs((c - value + 180.0) % 360.0 - 180.0) for c in coarse)
+
+    err_direct = closest(attr)
+    err_inverse = closest(-attr)
+    if min(err_direct, err_inverse) > 50.0:
+        return None, (u"orientation IGN (%.0f deg) incoherente avec l'emprise "
+                      u"(ecart %.0f deg)" % (attr, min(err_direct, err_inverse)))
+    if err_inverse < err_direct:
+        return -attr, (u"orientation IGN %.0f deg, convention inversee "
+                       u"(ecart %.0f deg)" % (attr, err_inverse))
+    return attr, u"orientation IGN %.0f deg (ecart %.0f deg)" % (attr, err_direct)
