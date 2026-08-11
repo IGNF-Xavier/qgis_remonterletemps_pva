@@ -3,6 +3,20 @@
 Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/) et le
 versionnement sémantique.
 
+## [1.2.0] - 2026-08-11
+
+### Ajouté
+- Aperçu par lecture partielle du scan distant via GDAL `/vsicurl/` : seule
+  une version décimée est lue, au lieu de rapatrier plusieurs centaines de Mo.
+- Exploitation de l'attribut « orientation du nord » du tableau d'assemblage
+  pour déterminer le quart de tour du cliché, avec case d'inversion si la
+  convention diffère.
+- Bouton « Ouvrir la fiche sur remonterletemps.ign.fr » (permalien
+  lon/lat/année/mission).
+
+### Modifié
+- L'aperçu ne déclenche plus un téléchargement complet.
+
 ## [1.1.0] - 2026-08-11
 
 ### Ajouté

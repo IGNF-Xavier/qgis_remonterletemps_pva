@@ -568,3 +568,52 @@ def match_on_ortho_fft(cale_path, ortho_path, gcps_level1,
         gnd_xy.append((float(Xc), float(Yc)))
 
     return img_xy, gnd_xy, len(keep), 0
+
+
+# ==========================================================================
+# exploitation de l'attribut "orientation du nord" du tableau d'assemblage
+# ==========================================================================
+def north_angle_of_fit(img_size, ground_corners_cw, k):
+    """
+    Angle du nord dans le repere image, en degres, pour l'assignation des
+    coins decalee de k quarts de tour.
+
+    Convention retenue, celle affichee par remonterletemps.ign.fr : angle
+    mesure depuis le haut du cliche, positif dans le sens horaire.
+    """
+    gcps = gcps_from_footprint(img_size, ground_corners_cw, k)
+    A, _ = affine_from_gcps(gcps)          # [X,Y] = A . [col,lig,1]
+    M = A[:, :2]
+    try:
+        Mi = np.linalg.inv(M)
+    except np.linalg.LinAlgError:
+        return None
+    # direction du nord terrain (0,1) exprimee en (col, lig)
+    d = Mi.dot(np.array([0.0, 1.0]))
+    # lig croit vers le bas : le "haut" du cliche est -lig
+    return (math.degrees(math.atan2(d[0], -d[1])) + 180.0) % 360.0 - 180.0
+
+
+def rotation_from_orientation(img_size, ground_corners_cw, orientation_deg,
+                              invert=False):
+    """
+    Choisit le quart de tour k (0-3) dont l'angle du nord colle a l'attribut
+    d'orientation fourni par l'IGN. Retourne (k, ecart_en_degres).
+    """
+    try:
+        target = float(orientation_deg)
+    except (TypeError, ValueError):
+        return 0, None
+    if invert:
+        target = -target
+    target = (target + 180.0) % 360.0 - 180.0
+
+    best, best_err = 0, None
+    for k in range(4):
+        angle = north_angle_of_fit(img_size, ground_corners_cw, k)
+        if angle is None:
+            continue
+        err = abs((angle - target + 180.0) % 360.0 - 180.0)
+        if best_err is None or err < best_err:
+            best, best_err = k, err
+    return best, best_err

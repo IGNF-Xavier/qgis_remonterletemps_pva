@@ -36,6 +36,8 @@ class Options(object):
         self.rotation_steps = 0      # calage sur emprise uniquement
         self.build_ovr = True
         self.write_json = True
+        self.use_orientation = True   # exploite l'attribut d'orientation IGN
+        self.invert_orientation = False
 
 
 def _log(feedback, msg):
@@ -67,6 +69,92 @@ def _ground_quad_from_P(P, img_size, z):
         q = Hi.dot(np.array([u, v, 1.0]))
         pts.append((q[0] / q[2], q[1] / q[2]))
     return pts
+
+
+ORIENT_KEYS = ("orientation", "orientation_nord", "azimut", "azimuth",
+               "cap", "angle", "rotation")
+
+
+def _orientation_of(props):
+    for key in ORIENT_KEYS:
+        val = props.get(key)
+        if val not in (None, ""):
+            try:
+                return float(val)
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
+def _rotation_steps(props, img_size, ground, opt, feedback=None):
+    """Quart de tour a appliquer : attribut IGN si disponible, sinon reglage."""
+    if opt.use_orientation:
+        orient = _orientation_of(props)
+        if orient is not None:
+            steps, err = georef.rotation_from_orientation(
+                img_size, ground, orient, invert=opt.invert_orientation)
+            if err is not None:
+                _log(feedback, u"  orientation IGN %.0f deg -> rotation %d deg "
+                               u"(ecart %.0f deg)" % (orient, steps * 90, err))
+                return steps
+    return opt.rotation_steps
+
+
+def make_preview(props, ring3857, opt, max_size=1600, feedback=None):
+    """
+    Apercu rapide : lit une version decimee du scan directement sur le serveur
+    via /vsicurl/, sans rapatrier les centaines de Mo du fichier complet, puis
+    la cale au niveau 1.
+    """
+    from osgeo import gdal
+
+    ds_id = props["dataset_identifier"]
+    img_id = props["image_identifier"]
+    tmp_dir = os.path.join(opt.outdir, "_tmp")
+    os.makedirs(tmp_dir, exist_ok=True)
+
+    ign_api.configure_gdal_http()
+    src = None
+    for ext in (".tif", ".jp2"):
+        try:
+            src = gdal.Open(ign_api.vsicurl_path(ds_id, img_id, ext))
+        except Exception:  # noqa: BLE001
+            src = None
+        if src is not None:
+            break
+    if src is None:
+        raise IOError(u"Lecture distante impossible pour %s" % img_id)
+
+    w, h = src.RasterXSize, src.RasterYSize
+    scale = max(1.0, max(w, h) / float(max_size))
+    ow, oh = max(1, int(w / scale)), max(1, int(h / scale))
+    _log(feedback, u"  lecture distante %dx%d -> apercu %dx%d" % (w, h, ow, oh))
+
+    small = os.path.join(tmp_dir, "%s_apercu_brut.tif" % img_id)
+    gdal.Translate(small, src, options=gdal.TranslateOptions(
+        width=ow, height=oh, format="GTiff",
+        creationOptions=["COMPRESS=DEFLATE", "TILED=YES"]))
+    src = None
+
+    if opt.crop_mode != CROP_NONE:
+        box = (crop_mod.detect_content_box(small, margin_pct=opt.crop_margin)
+               if opt.crop_mode == CROP_AUTO
+               else crop_mod.fixed_box(small, margin_pct=opt.fixed_margin))
+        cut = os.path.join(tmp_dir, "%s_apercu_crop.tif" % img_id)
+        crop_mod.crop_to_file(small, cut, box)
+        small = cut
+
+    img_size = georef.raster_size(small)
+    rect = georef.order_corners_cw(georef.min_area_rect(ring3857))
+    ground = georef.transform_points(rect, "EPSG:3857", opt.out_crs)
+    res = _auto_resolution(ground, img_size)
+
+    steps = _rotation_steps(props, img_size, ground, opt, feedback)
+    gcps = georef.gcps_from_footprint(img_size, ground, steps)
+    dest = os.path.join(tmp_dir, "%s_apercu.tif" % img_id)
+    georef.warp_with_gcps(small, dest, gcps, opt.out_crs, opt.out_crs,
+                          res=res, order=1)
+    return dest
 
 
 def process_cliche(props, ring3857, opt, feedback=None, is_canceled=None):
@@ -130,7 +218,8 @@ def process_cliche(props, ring3857, opt, feedback=None, is_canceled=None):
     res = opt.resolution or _auto_resolution(ground, img_size)
 
     # ---- 4. niveau 1 : calage sur l'emprise ---------------------------
-    gcps = georef.gcps_from_footprint(img_size, ground, opt.rotation_steps)
+    steps = _rotation_steps(props, img_size, ground, opt, feedback)
+    gcps = georef.gcps_from_footprint(img_size, ground, steps)
     _log(feedback, u"  calage sur l'emprise IGN (%.2f m/px)" % res)
     georef.warp_with_gcps(cropped, dest, gcps, opt.out_crs, opt.out_crs,
                           res=res, order=1)

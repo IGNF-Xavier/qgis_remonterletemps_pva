@@ -5,7 +5,8 @@ import json
 import os
 import traceback
 
-from qgis.PyQt.QtCore import pyqtSignal
+from qgis.PyQt.QtCore import QUrl, pyqtSignal
+from qgis.PyQt.QtGui import QDesktopServices
 from qgis.PyQt.QtWidgets import (
     QCheckBox, QComboBox, QDockWidget, QDoubleSpinBox, QFormLayout, QGroupBox,
     QHBoxLayout, QLabel, QMessageBox, QProgressBar, QPlainTextEdit,
@@ -91,6 +92,29 @@ class InstallTask(QgsTask):
         try:
             self.setProgress(10)
             self.ok, self.detail = deps.install_opencv(feedback=self.message.emit)
+            self.setProgress(100)
+            return True
+        except Exception as exc:  # noqa: BLE001
+            self.error = u"%s\n%s" % (exc, traceback.format_exc())
+            return False
+
+
+class PreviewTask(QgsTask):
+    message = pyqtSignal(str)
+
+    def __init__(self, props, ring, options):
+        QgsTask.__init__(self, u"Remonter le temps : apercu", QgsTask.CanCancel)
+        self.props = props
+        self.ring = ring
+        self.options = options
+        self.result = None
+        self.error = None
+
+    def run(self):
+        try:
+            self.setProgress(10)
+            self.result = pipeline.make_preview(
+                self.props, self.ring, self.options, feedback=self.message.emit)
             self.setProgress(100)
             return True
         except Exception as exc:  # noqa: BLE001
@@ -252,6 +276,10 @@ class RltDock(QDockWidget):
         h1.addWidget(self.btn_empty)
         lay.addLayout(h1)
 
+        self.btn_web = QPushButton(u"Ouvrir la fiche sur remonterletemps.ign.fr")
+        self.btn_web.clicked.connect(self.open_in_rlt)
+        lay.addWidget(self.btn_web)
+
         h2 = QHBoxLayout()
         h2.addWidget(QLabel(u"Opacite"))
         self.sld_opacity = QSlider(HORIZONTAL)
@@ -303,9 +331,20 @@ class RltDock(QDockWidget):
         self.spn_res.setSuffix(u" m/px")
         f2.addRow(u"Resolution", self.spn_res)
 
+        self.chk_orient = QCheckBox(u"Utiliser l'orientation du nord de l'IGN")
+        self.chk_orient.setChecked(True)
+        self.chk_orient.setToolTip(
+            u"Le tableau d'assemblage fournit l'angle du nord de chaque "
+            u"cliche : il determine le quart de tour a appliquer, sans avoir "
+            u"a le deviner.")
+        f2.addRow(self.chk_orient)
+
+        self.chk_orient_inv = QCheckBox(u"Inverser le sens de l'orientation")
+        f2.addRow(self.chk_orient_inv)
+
         self.spn_rot = QSpinBox()
         self.spn_rot.setRange(0, 3)
-        f2.addRow(u"Rotation x90 (niveau 1)", self.spn_rot)
+        f2.addRow(u"Rotation x90 (si pas d'orientation)", self.spn_rot)
 
         self.out_dir = QgsFileWidget()
         self.out_dir.setStorageMode(QgsFileWidget.GetDirectory)
@@ -380,7 +419,7 @@ class RltDock(QDockWidget):
     def _busy(self, state):
         for b in (self.btn_missions, self.btn_cliches, self.btn_cliches_all,
                   self.btn_run, self.btn_install, self.btn_uninstall,
-                  self.btn_preview):
+                  self.btn_preview, self.btn_web):
             b.setEnabled(not state)
         if not state:
             self.refresh_deps()
@@ -676,24 +715,40 @@ class RltDock(QDockWidget):
 
         entry = self._basket[ident]
         opt = self._options(outdir)
-        opt.level = pipeline.LEVEL_FOOTPRINT      # apercu = calage rapide
         opt.rotation_steps = 2 if self.chk_180.isChecked() else 0
-        opt.build_ovr = True
 
-        self.say(u"Apercu de %s (telechargement du scan)..." % ident)
-        task = ProcessTask([(entry["props"], entry["ring"])], opt)
+        self.say(u"Apercu de %s (lecture partielle du scan distant)..." % ident)
+        task = PreviewTask(entry["props"], entry["ring"], opt)
         task.message.connect(self.say)
         task.progressChanged.connect(lambda v: self.progress.setValue(int(v)))
         task.taskCompleted.connect(lambda: self._preview_done(task, ident))
         task.taskTerminated.connect(lambda: self._failed(task))
         self._start(task)
 
+    def open_in_rlt(self):
+        ident = self._current_ident()
+        if not ident:
+            QMessageBox.information(self, u"Fiche IGN",
+                                    u"Selectionnez un cliche dans le panier.")
+            return
+        entry = self._basket[ident]
+        props = entry["props"]
+        cx, cy = centroid_of(entry["ring"])
+        tr = QgsCoordinateTransform(QgsCoordinateReferenceSystem("EPSG:3857"),
+                                    QgsCoordinateReferenceSystem("EPSG:4326"),
+                                    QgsProject.instance())
+        pt = tr.transform(QgsPointXY(cx, cy))
+        url = ign_api.rlt_permalink(pt.x(), pt.y(), year_of(props),
+                                    props.get("dataset_identifier"))
+        QDesktopServices.openUrl(QUrl(url))
+        self.say(u"Ouverture de %s" % url)
+
     def _preview_done(self, task, ident):
         self._busy(False)
-        if not task.results:
+        if not task.result:
             self.say(u"Apercu indisponible.")
             return
-        layer = QgsRasterLayer(task.results[0], u"apercu %s" % ident)
+        layer = QgsRasterLayer(task.result, u"apercu %s" % ident)
         if not layer.isValid():
             self.say(u"Raster d'apercu invalide.")
             return
@@ -726,6 +781,8 @@ class RltDock(QDockWidget):
         opt.resolution = self.spn_res.value()
         opt.rotation_steps = self.spn_rot.value()
         opt.write_json = self.chk_json.isChecked()
+        opt.use_orientation = self.chk_orient.isChecked()
+        opt.invert_orientation = self.chk_orient_inv.isChecked()
         return opt
 
     def run_processing(self):

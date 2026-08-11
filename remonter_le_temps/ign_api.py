@@ -155,6 +155,41 @@ def fetch_cliches(bbox3857, dataset_identifier=None, **kw):
 # --------------------------------------------------------------------------
 # telechargement des scans
 # --------------------------------------------------------------------------
+def remote_url(dataset_identifier, image_identifier, ext=".tif"):
+    """URL du scan sur la Geoplateforme."""
+    return DOWNLOAD_URL.format(ds=dataset_identifier, img=image_identifier,
+                               ext=ext)
+
+
+def vsicurl_path(dataset_identifier, image_identifier, ext=".tif"):
+    """Chemin GDAL /vsicurl/ : permet de lire le scan sans le rapatrier."""
+    return "/vsicurl/" + remote_url(dataset_identifier, image_identifier, ext)
+
+
+def rlt_permalink(lon, lat, year=None, mission=None, zoom=14):
+    """Lien vers la fiche du cliche sur remonterletemps.ign.fr."""
+    params = {"lon": "%.6f" % lon, "lat": "%.6f" % lat, "z": str(int(zoom)),
+              "pointer": "true", "layer": "pva"}
+    if year:
+        params["year"] = str(year)
+    if mission:
+        params["mission"] = str(mission)
+    return "https://remonterletemps.ign.fr/telecharger/?" + \
+        urllib.parse.urlencode(params)
+
+
+def configure_gdal_http():
+    """Reglages /vsicurl/ : lectures par plages, cache raisonnable."""
+    from osgeo import gdal
+    gdal.SetConfigOption("GDAL_DISABLE_READDIR_ON_OPEN", "EMPTY_DIR")
+    gdal.SetConfigOption("CPL_VSIL_CURL_ALLOWED_EXTENSIONS", ".tif,.jp2")
+    gdal.SetConfigOption("GDAL_HTTP_MAX_RETRY", "3")
+    gdal.SetConfigOption("GDAL_HTTP_RETRY_DELAY", "2")
+    gdal.SetConfigOption("VSI_CACHE", "TRUE")
+    gdal.SetConfigOption("VSI_CACHE_SIZE", "50000000")
+    gdal.SetConfigOption("GDAL_HTTP_USERAGENT", USER_AGENT)
+
+
 def download_cliche(dataset_identifier, image_identifier, outdir, overwrite=False):
     """Telecharge le scan brut. Retourne le chemin local."""
     os.makedirs(outdir, exist_ok=True)

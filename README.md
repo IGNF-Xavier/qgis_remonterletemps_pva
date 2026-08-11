@@ -80,10 +80,12 @@ L'interface est en trois onglets : **Recherche**, **Panier**, **Traitement**.
    Chaque cliché affiche les coordonnées de son centre et son angle
    d'orientation ; l'infobulle donne toutes les métadonnées du WFS. Décocher
    ce qui ne sert pas, puis **Nettoyer décochés**.
-6. **Aperçu du cliché** télécharge le scan et l'affiche avec un calage rapide
-   (niveau 1). Le curseur d'opacité et la case *180°* permettent de le
-   comparer au fond de carte — les scans IGN sont souvent tête-bêche par
-   rapport à leur emprise.
+6. **Aperçu du cliché** lit une version décimée du scan *directement sur le
+   serveur* (GDAL `/vsicurl/`, lectures par plages HTTP) et l'affiche calée au
+   niveau 1 : quelques Mo au lieu des centaines de Mo du fichier complet. Le
+   curseur d'opacité permet de le comparer au fond de carte. Le bouton
+   *Ouvrir la fiche sur remonterletemps.ign.fr* pointe le cliché sur le site
+   officiel.
 7. Onglet **Traitement** : mode de découpe, niveau de calage, CRS, résolution,
    dossier de sortie → **Télécharger et traiter les clichés cochés**.
 
@@ -107,7 +109,10 @@ Le mode *marge fixe* est là pour les cas atypiques.
 ## Les trois niveaux de calage
 
 **Niveau 1 — emprise IGN.** Les 4 coins du cliché découpé sont ajustés sur les
-4 sommets de l'emprise du tableau d'assemblage. L'image est correctement
+4 sommets de l'emprise du tableau d'assemblage. L'attribut *orientation du
+nord* fourni par l'IGN détermine lequel des quatre quarts de tour appliquer —
+c'est mesuré, pas deviné. Si la convention d'angle diffère, une case
+*Inverser le sens de l'orientation* corrige le tir. L'image est correctement
 orientée et à la bonne échelle, mais l'emprise IGN est elle-même approximative
 (les PVA sont documentées comme « approximativement placées ») : compter
 plusieurs dizaines de mètres d'écart. Instantané, aucune donnée externe.
