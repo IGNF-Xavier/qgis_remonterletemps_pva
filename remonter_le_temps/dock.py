@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Panneau lateral du plugin."""
 
+import copy
 import json
 import os
 import traceback
@@ -138,14 +139,22 @@ class ProcessTask(QgsTask):
     def run(self):
         try:
             total = len(self.items)
-            for i, (props, ring) in enumerate(self.items):
+            for i, item in enumerate(self.items):
+                props, ring = item[0], item[1]
+                options = copy.copy(self.options)
+                # reglage propre au cliche, cumule avec la correction globale
+                options.extra_rotation_deg = (
+                    self.options.extra_rotation_deg +
+                    (float(item[2]) if len(item) > 2 else 0.0)) % 360.0
+                if len(item) > 3 and item[3]:
+                    options.mirror = not self.options.mirror
                 if self.isCanceled():
                     return False
                 self.message.emit(u"[%d/%d] %s"
                                   % (i + 1, total, props["image_identifier"]))
                 try:
                     out = pipeline.process_cliche(
-                        props, ring, self.options,
+                        props, ring, options,
                         feedback=self.message.emit,
                         is_canceled=self.isCanceled)
                     if out:
@@ -270,6 +279,7 @@ class RltDock(QDockWidget):
         self.tree.setHeaderLabels([u"Annee / mission / cliche"])
         self.tree.setAlternatingRowColors(True)
         self.tree.itemChanged.connect(self._item_changed)
+        self.tree.currentItemChanged.connect(self._sync_orientation_widgets)
         lay.addWidget(self.tree, 1)
 
         h1 = QHBoxLayout()
@@ -300,13 +310,16 @@ class RltDock(QDockWidget):
         self.cmb_rot_preview.addItems([u"0 deg", u"90 deg", u"180 deg",
                                        u"270 deg"])
         self.cmb_rot_preview.setToolTip(
-            u"S'ajoute a l'orientation deduite des metadonnees. A utiliser si "
-            u"l'apercu tombe manifestement de travers.")
+            u"Rotation propre au cliche selectionne, memorisee dans le panier "
+            u"et reutilisee au telechargement. L'orientation varie d'un cliche "
+            u"a l'autre au sein d'une meme mission.")
+        self.cmb_rot_preview.currentIndexChanged.connect(self._orientation_changed)
         h2.addWidget(self.cmb_rot_preview)
         self.chk_mirror = QCheckBox(u"Miroir")
         self.chk_mirror.setToolTip(u"Certains scans sont numerises cote "
                                    u"emulsion : aucune rotation ne les fera "
                                    u"coincider, seule la symetrie le peut.")
+        self.chk_mirror.toggled.connect(self._orientation_changed)
         h2.addWidget(self.chk_mirror)
         lay.addLayout(h2)
         return page
@@ -373,9 +386,10 @@ class RltDock(QDockWidget):
 
         self.cmb_extra = QComboBox()
         self.cmb_extra.addItems([u"0 deg", u"90 deg", u"180 deg", u"270 deg"])
-        self.cmb_extra.setToolTip(u"Correction ajoutee a l'orientation deduite "
-                                  u"des metadonnees, dans tous les modes.")
-        f2.addRow(u"Correction de rotation", self.cmb_extra)
+        self.cmb_extra.setToolTip(
+            u"Correction appliquee a TOUS les cliches. Elle s'ajoute a la "
+            u"rotation propre a chaque cliche, reglee dans le panier.")
+        f2.addRow(u"Correction de rotation (globale)", self.cmb_extra)
 
         self.chk_mirror_run = QCheckBox(u"Scan en miroir (cote emulsion)")
         f2.addRow(self.chk_mirror_run)
@@ -751,7 +765,8 @@ class RltDock(QDockWidget):
         ident = props.get("image_identifier")
         if not ident or ident in self._basket:
             return 0
-        self._basket[ident] = {"props": props, "ring": ring, "checked": True}
+        self._basket[ident] = {"props": props, "ring": ring, "checked": True,
+                               "rotation": 0, "mirror": False}
         return 1
 
     def rebuild_tree(self):
@@ -789,6 +804,11 @@ class RltDock(QDockWidget):
                     legend += u" - orientation %.0f deg" % float(orient)
                 except (TypeError, ValueError):
                     legend += u" - orientation %s" % orient
+            rot = entry.get("rotation", 0)
+            if rot:
+                legend += u" - ROTATION %d deg" % rot
+            if entry.get("mirror"):
+                legend += u" - MIROIR"
             item = QTreeWidgetItem(node_m, [u"%s\n    %s" % (ident, legend)])
             item.setFlags(ITEM_ENABLED | ITEM_SELECTABLE | ITEM_CHECKABLE)
             item.setCheckState(0, CHECKED if entry["checked"] else UNCHECKED)
@@ -814,6 +834,70 @@ class RltDock(QDockWidget):
         ident = item.data(0, USER_ROLE)
         if ident and ident in self._basket:
             self._basket[ident]["checked"] = item.checkState(0) == CHECKED
+
+    def _sync_orientation_widgets(self, *_args):
+        """Recharge rotation et miroir du cliche courant dans les widgets."""
+        ident = self._current_ident()
+        entry = self._basket.get(ident) if ident else None
+        self._syncing = True
+        try:
+            self.cmb_rot_preview.setCurrentIndex(
+                int((entry or {}).get("rotation", 0) / 90) % 4)
+            self.chk_mirror.setChecked(bool((entry or {}).get("mirror", False)))
+            self.cmb_rot_preview.setEnabled(entry is not None)
+            self.chk_mirror.setEnabled(entry is not None)
+        finally:
+            self._syncing = False
+
+    def _orientation_changed(self, *_args):
+        """Enregistre le reglage sur le cliche courant et rafraichit l'apercu."""
+        if getattr(self, "_syncing", False):
+            return
+        ident = self._current_ident()
+        if not ident or ident not in self._basket:
+            return
+        entry = self._basket[ident]
+        entry["rotation"] = 90 * self.cmb_rot_preview.currentIndex()
+        entry["mirror"] = self.chk_mirror.isChecked()
+        self._refresh_item_label(ident)
+        # si un apercu est affiche, on le recalcule immediatement : le scan est
+        # deja en cache, l'operation est quasi instantanee
+        layer_id = self._previews.get(ident)
+        if layer_id and QgsProject.instance().mapLayer(layer_id) is not None:
+            self._remove_preview(ident)
+            self.preview_current()
+
+    def _refresh_item_label(self, ident):
+        entry = self._basket.get(ident)
+        item = self._find_item(ident)
+        if entry is None or item is None:
+            return
+        cx, cy = centroid_of(entry["ring"])
+        orient = prop(entry["props"], ORIENT_KEYS)
+        legend = u"centre %.0f / %.0f (3857)" % (cx, cy)
+        if orient is not None:
+            try:
+                legend += u" - orientation %.0f deg" % float(orient)
+            except (TypeError, ValueError):
+                legend += u" - orientation %s" % orient
+        if entry.get("rotation"):
+            legend += u" - ROTATION %d deg" % entry["rotation"]
+        if entry.get("mirror"):
+            legend += u" - MIROIR"
+        self.tree.blockSignals(True)
+        item.setText(0, u"%s\n    %s" % (ident, legend))
+        self.tree.blockSignals(False)
+
+    def _find_item(self, ident):
+        for i in range(self.tree.topLevelItemCount()):
+            node_y = self.tree.topLevelItem(i)
+            for j in range(node_y.childCount()):
+                node_m = node_y.child(j)
+                for k in range(node_m.childCount()):
+                    item = node_m.child(k)
+                    if item.data(0, USER_ROLE) == ident:
+                        return item
+        return None
 
     def _current_ident(self):
         item = self.tree.currentItem()
@@ -861,8 +945,8 @@ class RltDock(QDockWidget):
 
         entry = self._basket[ident]
         opt = self._options(outdir)
-        opt.extra_rotation_deg = 90.0 * self.cmb_rot_preview.currentIndex()
-        opt.mirror = self.chk_mirror.isChecked()
+        opt.extra_rotation_deg = float(entry.get("rotation", 0))
+        opt.mirror = bool(entry.get("mirror", False))
 
         self.say(u"Apercu de %s (lecture partielle du scan distant)..." % ident)
         task = PreviewTask(entry["props"], entry["ring"], opt)
@@ -936,7 +1020,8 @@ class RltDock(QDockWidget):
         return opt
 
     def run_processing(self):
-        items = [(v["props"], v["ring"])
+        items = [(v["props"], v["ring"], v.get("rotation", 0),
+                  bool(v.get("mirror", False)))
                  for v in self._basket.values() if v["checked"]]
         if not items:
             QMessageBox.warning(self, u"Panier",

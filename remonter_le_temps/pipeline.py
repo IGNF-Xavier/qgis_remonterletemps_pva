@@ -265,6 +265,23 @@ def make_preview(props, ring3857, opt, max_size=1600, feedback=None):
     tmp_dir = os.path.join(opt.outdir, "_tmp")
     os.makedirs(tmp_dir, exist_ok=True)
 
+    cache_meta = os.path.join(tmp_dir, "%s_apercu.json" % img_id)
+    cache_img = os.path.join(tmp_dir, "%s_apercu_crop.tif" % img_id)
+    cache_raw = os.path.join(tmp_dir, "%s_apercu_brut.tif" % img_id)
+    if os.path.exists(cache_meta) and (os.path.exists(cache_img) or
+                                       os.path.exists(cache_raw)):
+        try:
+            with open(cache_meta, encoding="utf-8") as fh:
+                meta = json.load(fh)
+            small = cache_img if os.path.exists(cache_img) else cache_raw
+            _log(feedback, u"  apercu deja telecharge, simple recalcul")
+            return _preview_warp(props, ring3857, opt, small, img_id, tmp_dir,
+                                 tuple(meta["prev_full"]),
+                                 tuple(meta["crop_offset"]),
+                                 meta["scale_factor"], meta["pitch"], feedback)
+        except Exception:  # noqa: BLE001
+            pass
+
     ign_api.configure_gdal_http()
     src = None
     for ext in (".tif", ".jp2"):
@@ -303,13 +320,28 @@ def make_preview(props, ring3857, opt, max_size=1600, feedback=None):
         small = cut
         crop_offset = (box[0], box[1])
 
+    with open(os.path.join(tmp_dir, "%s_apercu.json" % img_id), "w",
+              encoding="utf-8") as fh:
+        json.dump({"prev_full": list(prev_full),
+                   "crop_offset": list(crop_offset),
+                   "scale_factor": scale_factor,
+                   "pitch": pitch_remote}, fh)
+
+    return _preview_warp(props, ring3857, opt, small, img_id, tmp_dir,
+                         prev_full, crop_offset, scale_factor, pitch_remote,
+                         feedback)
+
+
+def _preview_warp(props, ring3857, opt, small, img_id, tmp_dir, prev_full,
+                  crop_offset, scale_factor, pitch_remote, feedback=None):
+    """Calage de l'apercu, a partir de la version decimee deja disponible."""
     img_size = georef.raster_size(small)
     rect = georef.order_corners_cw(georef.min_area_rect(ring3857))
     ground = georef.transform_points(rect, "EPSG:3857", opt.out_crs)
     centre = _centre_of(props, ring3857, opt.out_crs)
 
-    metric = _metric_gcps(props, pitch_remote, scale_factor, img_size, prev_full,
-                          crop_offset, centre, ground, opt, feedback)
+    metric = _metric_gcps(props, pitch_remote, scale_factor, img_size,
+                          prev_full, crop_offset, centre, ground, opt, feedback)
     if metric is not None:
         gcps, res = metric
     else:

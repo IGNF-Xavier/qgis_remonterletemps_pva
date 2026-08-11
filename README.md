@@ -104,7 +104,12 @@ L'interface est en trois onglets : **Recherche**, **Panier**, **Traitement**.
    curseur d'opacité permet de le comparer au fond de carte. Le bouton
    *Ouvrir la fiche sur remonterletemps.ign.fr* pointe le cliché sur le site
    officiel.
-7. Onglet **Traitement** : mode de découpe, niveau de calage, CRS, résolution,
+7. Si un cliché tombe de travers, réglez sa **rotation** (0/90/180/270°) ou
+   cochez **Miroir** dans le panier : l'aperçu se recalcule aussitôt, sans
+   retélécharger, et le réglage est mémorisé pour le traitement. L'orientation
+   varie d'un cliché à l'autre au sein d'une même mission, chaque entrée garde
+   donc la sienne.
+8. Onglet **Traitement** : mode de découpe, niveau de calage, CRS, résolution,
    dossier de sortie → **Télécharger et traiter les clichés cochés**.
 
 Sortie :

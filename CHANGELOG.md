@@ -3,6 +3,23 @@
 Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/) et le
 versionnement sémantique.
 
+## [1.7.0] - 2026-08-11
+
+### Ajouté
+- **Rotation et miroir par cliché**, réglés dans le panier, mémorisés dans
+  l'entrée et réutilisés tels quels au téléchargement et au calage.
+  L'orientation n'est pas constante au sein d'une même mission : un réglage
+  global ne suffisait pas.
+- Les deux réglages suivent le cliché sélectionné dans l'arborescence et le
+  libellé indique ceux qui ne sont pas au réglage par défaut.
+- Modifier la rotation **rafraîchit l'aperçu immédiatement**.
+- Mise en cache de l'aperçu décimé : changer la rotation ne retélécharge plus
+  le scan, le recalcul est quasi instantané.
+
+### Modifié
+- La correction de rotation de l'onglet Traitement devient une correction
+  globale, cumulée avec le réglage propre à chaque cliché.
+
 ## [1.6.0] - 2026-08-11
 
 ### Corrigé
