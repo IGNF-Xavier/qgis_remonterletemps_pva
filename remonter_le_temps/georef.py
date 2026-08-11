@@ -104,7 +104,8 @@ def order_corners_cw(corners):
 # ==========================================================================
 # niveau 1 : calage sur l'emprise du tableau d'assemblage
 # ==========================================================================
-def gcps_from_footprint(img_size, ground_corners_cw, rotation_steps=0):
+def gcps_from_footprint(img_size, ground_corners_cw, rotation_steps=0,
+                        mirror=False):
     """
     Associe les 4 coins du cliche aux 4 sommets de l'emprise.
     rotation_steps : 0/1/2/3 -> rotation de 90 degres du cliche.
@@ -113,6 +114,9 @@ def gcps_from_footprint(img_size, ground_corners_cw, rotation_steps=0):
     img_corners = [(0.5, 0.5), (w - 0.5, 0.5), (w - 0.5, h - 0.5), (0.5, h - 0.5)]
     k = rotation_steps % 4
     ground = ground_corners_cw[k:] + ground_corners_cw[:k]
+    if mirror:
+        img_corners = [img_corners[1], img_corners[0],
+                       img_corners[3], img_corners[2]]
     return [gdal.GCP(g[0], g[1], 0.0, p[0], p[1])
             for p, g in zip(img_corners, ground)]
 
@@ -749,7 +753,7 @@ def north_vectors(north_deg):
 
 
 def gcps_from_metric(img_size, centre_ground, gsd, north_deg,
-                     crop_offset=(0, 0), full_size=None):
+                     crop_offset=(0, 0), full_size=None, mirror=False):
     """
     Points de calage deduits de la geometrie de la prise de vue plutot que de
     l'emprise approximative du tableau d'assemblage.
@@ -771,7 +775,7 @@ def gcps_from_metric(img_size, centre_ground, gsd, north_deg,
     gcps = []
     for (u, v) in ((0.5, 0.5), (w - 0.5, 0.5), (w - 0.5, h - 0.5), (0.5, h - 0.5),
                    (w / 2.0, h / 2.0)):
-        du = (u - cu) * gsd
+        du = ((w - 1.0 - u) - cu) * gsd if mirror else (u - cu) * gsd
         dv = (cv - v) * gsd          # lignes vers le bas
         X = centre_ground[0] + du * right[0] + dv * up[0]
         Y = centre_ground[1] + du * right[1] + dv * up[1]

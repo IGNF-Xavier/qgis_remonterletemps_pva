@@ -39,6 +39,8 @@ class Options(object):
         self.use_orientation = True   # exploite l'attribut d'orientation IGN
         self.invert_orientation = False
         self.use_metric = True        # calage par pas de scan + echelle + centre
+        self.extra_rotation_deg = 0.0  # correction manuelle, s'ajoute a l'orientation
+        self.mirror = False            # scan numerise cote emulsion
 
 
 def _log(feedback, msg):
@@ -181,6 +183,12 @@ def _metric_gcps(props, pitch_m, decim, img_size, full_size, crop_offset,
     _log(feedback, u"  %s" % note)
     if north is None:
         return None
+    if opt.extra_rotation_deg:
+        north = (north + opt.extra_rotation_deg + 180.0) % 360.0 - 180.0
+        _log(feedback, u"  rotation manuelle +%d deg -> nord a %.0f deg"
+             % (opt.extra_rotation_deg, north))
+    if opt.mirror:
+        _log(feedback, u"  symetrie horizontale appliquee")
 
     if scale:
         gsd = pitch_m * decim * scale
@@ -188,7 +196,7 @@ def _metric_gcps(props, pitch_m, decim, img_size, full_size, crop_offset,
     else:
         gsd = gsd_from_footprint
     gcps = georef.gcps_from_metric(img_size, centre, gsd, north,
-                                   crop_offset, full_size)
+                                   crop_offset, full_size, mirror=opt.mirror)
 
     # garde-fou : le calage metrique doit rester compatible avec l'emprise du
     # tableau d'assemblage. Un ecart enorme signale une metadonnee mal lue
@@ -230,16 +238,18 @@ def _sanity_check(gcps, ground, max_centre_ratio=0.75, size_range=(0.5, 2.0)):
 
 def _rotation_steps(props, img_size, ground, opt, feedback=None):
     """Quart de tour a appliquer : attribut IGN si disponible, sinon reglage."""
+    extra = int(round(opt.extra_rotation_deg / 90.0)) % 4
     if opt.use_orientation:
         orient = _orientation_of(props)
         if orient is not None:
             steps, err = georef.rotation_from_orientation(
                 img_size, ground, orient, invert=opt.invert_orientation)
             if err is not None:
+                steps = (steps + extra) % 4
                 _log(feedback, u"  orientation IGN %.0f deg -> rotation %d deg "
                                u"(ecart %.0f deg)" % (orient, steps * 90, err))
                 return steps
-    return opt.rotation_steps
+    return (opt.rotation_steps + extra) % 4
 
 
 def make_preview(props, ring3857, opt, max_size=1600, feedback=None):
@@ -305,7 +315,8 @@ def make_preview(props, ring3857, opt, max_size=1600, feedback=None):
     else:
         res = _auto_resolution(ground, img_size)
         steps = _rotation_steps(props, img_size, ground, opt, feedback)
-        gcps = georef.gcps_from_footprint(img_size, ground, steps)
+        gcps = georef.gcps_from_footprint(img_size, ground, steps,
+                                          mirror=opt.mirror)
     dest = os.path.join(tmp_dir, "%s_apercu.tif" % img_id)
     georef.warp_with_gcps(small, dest, gcps, opt.out_crs, opt.out_crs,
                           res=res, order=1)
@@ -386,7 +397,8 @@ def process_cliche(props, ring3857, opt, feedback=None, is_canceled=None):
     else:
         res = opt.resolution or _auto_resolution(ground, img_size)
         steps = _rotation_steps(props, img_size, ground, opt, feedback)
-        gcps = georef.gcps_from_footprint(img_size, ground, steps)
+        gcps = georef.gcps_from_footprint(img_size, ground, steps,
+                                          mirror=opt.mirror)
         _log(feedback, u"  calage sur l'emprise IGN (%.2f m/px)" % res)
     georef.warp_with_gcps(cropped, dest, gcps, opt.out_crs, opt.out_crs,
                           res=res, order=1)

@@ -3,6 +3,24 @@
 Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/) et le
 versionnement sémantique.
 
+## [1.6.0] - 2026-08-11
+
+### Corrigé
+- **Couche « Centres clichés » jamais créée** : `QgsPalLayerSettings.OverPoint`
+  ne résout plus vers le bon enum sous QGIS 3.40 et levait un `TypeError` qui
+  interrompait la fonction avant l'ajout de la couche. L'enum est résolu selon
+  la version, et l'étiquetage est isolé : il ne peut plus empêcher la couche
+  d'exister.
+- **Aperçu nécessitant deux clics** après suppression manuelle de la couche :
+  le plugin croyait l'aperçu encore actif et consommait le premier clic à le
+  « retirer ». L'existence de la couche est désormais vérifiée.
+- La correction de rotation était ignorée par le calage métrique : elle
+  s'applique maintenant dans tous les modes, en s'ajoutant à l'angle du nord.
+
+### Ajouté
+- Correction de rotation 0/90/180/270° et bascule **Miroir** (scan numérisé
+  côté émulsion), disponibles pour l'aperçu comme pour le traitement complet.
+
 ## [1.5.0] - 2026-08-11
 
 ### Corrigé

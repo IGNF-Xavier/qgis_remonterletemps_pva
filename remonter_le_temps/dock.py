@@ -295,10 +295,19 @@ class RltDock(QDockWidget):
         self.sld_opacity.setValue(100)
         self.sld_opacity.valueChanged.connect(self._apply_opacity)
         h2.addWidget(self.sld_opacity, 1)
-        self.chk_180 = QCheckBox(u"180 deg")
-        self.chk_180.setToolTip(u"Retourne l'apercu : les scans IGN sont souvent "
-                                u"tete-beche par rapport a l'emprise.")
-        h2.addWidget(self.chk_180)
+        h2.addWidget(QLabel(u"Rotation"))
+        self.cmb_rot_preview = QComboBox()
+        self.cmb_rot_preview.addItems([u"0 deg", u"90 deg", u"180 deg",
+                                       u"270 deg"])
+        self.cmb_rot_preview.setToolTip(
+            u"S'ajoute a l'orientation deduite des metadonnees. A utiliser si "
+            u"l'apercu tombe manifestement de travers.")
+        h2.addWidget(self.cmb_rot_preview)
+        self.chk_mirror = QCheckBox(u"Miroir")
+        self.chk_mirror.setToolTip(u"Certains scans sont numerises cote "
+                                   u"emulsion : aucune rotation ne les fera "
+                                   u"coincider, seule la symetrie le peut.")
+        h2.addWidget(self.chk_mirror)
         lay.addLayout(h2)
         return page
 
@@ -361,6 +370,15 @@ class RltDock(QDockWidget):
         self.spn_rot = QSpinBox()
         self.spn_rot.setRange(0, 3)
         f2.addRow(u"Rotation x90 (si pas d'orientation)", self.spn_rot)
+
+        self.cmb_extra = QComboBox()
+        self.cmb_extra.addItems([u"0 deg", u"90 deg", u"180 deg", u"270 deg"])
+        self.cmb_extra.setToolTip(u"Correction ajoutee a l'orientation deduite "
+                                  u"des metadonnees, dans tous les modes.")
+        f2.addRow(u"Correction de rotation", self.cmb_extra)
+
+        self.chk_mirror_run = QCheckBox(u"Scan en miroir (cote emulsion)")
+        f2.addRow(self.chk_mirror_run)
 
         self.out_dir = QgsFileWidget()
         self.out_dir.setStorageMode(QgsFileWidget.GetDirectory)
@@ -621,29 +639,41 @@ class RltDock(QDockWidget):
             "outline_color": "0,0,0,255", "outline_width": "0.4",
             "size": "3.4"}))
 
-        settings = QgsPalLayerSettings()
-        settings.fieldName = "numero"
-        settings.placement = QgsPalLayerSettings.OverPoint
+        # L'etiquetage ne doit jamais empecher la couche d'exister : selon la
+        # version de QGIS, les enums de placement ont change de classe.
         try:
-            settings.quadOffset = QgsPalLayerSettings.QuadrantAboveRight
+            settings = QgsPalLayerSettings()
+            settings.fieldName = "numero"
+            placement = None
+            for owner, attr in ((Qgis, "LabelPlacement"),):
+                holder = getattr(owner, attr, None)
+                if holder is not None and hasattr(holder, "OverPoint"):
+                    placement = holder.OverPoint
+                    break
+            if placement is None:
+                placement = getattr(QgsPalLayerSettings, "OverPoint", None)
+            if placement is not None:
+                settings.placement = placement
             settings.yOffset = 1.5
             settings.xOffset = 1.5
-        except AttributeError:
-            pass
-        fmt = QgsTextFormat()
-        fmt.setSize(11)
-        font = fmt.font()
-        font.setBold(True)
-        fmt.setFont(font)
-        fmt.setColor(QColor(0, 0, 0))
-        buf = QgsTextBufferSettings()
-        buf.setEnabled(True)
-        buf.setSize(1.2)
-        buf.setColor(QColor(255, 255, 255))
-        fmt.setBuffer(buf)
-        settings.setFormat(fmt)
-        layer.setLabeling(QgsVectorLayerSimpleLabeling(settings))
-        layer.setLabelsEnabled(True)
+
+            fmt = QgsTextFormat()
+            fmt.setSize(11)
+            font = fmt.font()
+            font.setBold(True)
+            fmt.setFont(font)
+            fmt.setColor(QColor(0, 0, 0))
+            buf = QgsTextBufferSettings()
+            buf.setEnabled(True)
+            buf.setSize(1.2)
+            buf.setColor(QColor(255, 255, 255))
+            fmt.setBuffer(buf)
+            settings.setFormat(fmt)
+            layer.setLabeling(QgsVectorLayerSimpleLabeling(settings))
+            layer.setLabelsEnabled(True)
+        except Exception as exc:  # noqa: BLE001
+            self.say(u"  (etiquettes des centres desactivees : %s)" % exc)
+
         layer.setCustomProperty("rlt_type", "centres")
         QgsProject.instance().addMapLayer(layer)
         return layer
@@ -812,7 +842,13 @@ class RltDock(QDockWidget):
             QMessageBox.information(self, u"Apercu",
                                     u"Selectionnez un cliche dans le panier.")
             return
-        if ident in self._previews:
+        # si la couche a ete supprimee a la main dans le gestionnaire, on ne
+        # doit pas consommer le clic a "retirer" un apercu qui n'existe plus
+        layer_id = self._previews.get(ident)
+        if layer_id and QgsProject.instance().mapLayer(layer_id) is None:
+            self._previews.pop(ident, None)
+            layer_id = None
+        if layer_id:
             self._remove_preview(ident)
             self.say(u"Apercu retire : %s" % ident)
             return
@@ -825,7 +861,8 @@ class RltDock(QDockWidget):
 
         entry = self._basket[ident]
         opt = self._options(outdir)
-        opt.rotation_steps = 2 if self.chk_180.isChecked() else 0
+        opt.extra_rotation_deg = 90.0 * self.cmb_rot_preview.currentIndex()
+        opt.mirror = self.chk_mirror.isChecked()
 
         self.say(u"Apercu de %s (lecture partielle du scan distant)..." % ident)
         task = PreviewTask(entry["props"], entry["ring"], opt)
@@ -892,6 +929,8 @@ class RltDock(QDockWidget):
         opt.rotation_steps = self.spn_rot.value()
         opt.write_json = self.chk_json.isChecked()
         opt.use_metric = self.chk_metric.isChecked()
+        opt.extra_rotation_deg = 90.0 * self.cmb_extra.currentIndex()
+        opt.mirror = self.chk_mirror_run.isChecked()
         opt.use_orientation = self.chk_orient.isChecked()
         opt.invert_orientation = self.chk_orient_inv.isChecked()
         return opt
