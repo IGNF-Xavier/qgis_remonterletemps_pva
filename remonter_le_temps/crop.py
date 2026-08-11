@@ -58,30 +58,78 @@ def _longest_run(mask):
     return best
 
 
-def detect_content_box(path, margin_pct=1.5, dark_ratio=0.55):
+def _energy_profiles(small):
+    """Energie de gradient par ligne et par colonne."""
+    a = small.astype(np.float32)
+    gy, gx = np.gradient(a)
+    energy = np.hypot(gx, gy)
+    return energy.mean(axis=1), energy.mean(axis=0)
+
+
+def _smooth(profile, window=9):
+    if len(profile) < window:
+        return profile
+    kernel = np.ones(window, dtype=np.float32) / float(window)
+    return np.convolve(profile, kernel, mode="same")
+
+
+def _box_from_profiles(row, col, ratio):
+    """Plus long bloc contigu au-dessus du seuil, sur chaque axe."""
+    def run(profile):
+        prof = _smooth(profile)
+        hi = float(np.percentile(prof, 95))
+        lo = float(np.percentile(prof, 5))
+        if hi <= lo:
+            return None
+        thr = lo + ratio * (hi - lo)
+        return _longest_run(prof > thr)
+
+    r = run(row)
+    c = run(col)
+    if r is None or c is None:
+        return None
+    return c[0], r[0], c[1], r[1]
+
+
+def detect_content_box(path, margin_pct=2.0, dark_ratio=0.55):
     """
     Retourne (x0, y0, x1, y1) en pixels pleine resolution : la zone utile.
 
+    La zone photographiee se distingue du pourtour par sa TEXTURE, pas par sa
+    luminosite : selon les campagnes, le fond de chambre apparait noir, gris
+    ou clair, et un bandeau de reperes peut border le cliche. On cherche donc
+    le plus long bloc de lignes et de colonnes a forte energie de gradient,
+    et on ne retombe sur le critere de luminosite qu'en cas d'echec.
+
     margin_pct : marge de securite rognee sur chaque bord, en % de la
-                 dimension correspondante (les reperes de fond de chambre
-                 debordent souvent legerement sur l'image).
+                 dimension correspondante.
     """
     small, (w, h), (ow, oh) = _overview_array(path)
 
-    # seuil : mi-chemin entre le noir du cadre et la moyenne du cliche
-    thr = max(20, int(0.45 * float(np.median(small))))
-    bright = small > thr
+    box = None
+    rows, cols = _energy_profiles(small)
+    for ratio in (0.30, 0.20, 0.45):
+        cand = _box_from_profiles(rows, cols, ratio)
+        if cand is None:
+            continue
+        x0s, y0s, x1s, y1s = cand
+        if (y1s - y0s) > 0.45 * oh and (x1s - x0s) > 0.45 * ow:
+            box = cand
+            break
 
-    row_frac = bright.mean(axis=1)
-    col_frac = bright.mean(axis=0)
+    if box is None:
+        # repli : cadre nettement plus sombre que le cliche
+        thr = max(20, int(0.45 * float(np.median(small))))
+        bright = small > thr
+        y0s, y1s = _longest_run(bright.mean(axis=1) > dark_ratio)
+        x0s, x1s = _longest_run(bright.mean(axis=0) > dark_ratio)
+        if (y1s - y0s) > 0.3 * oh and (x1s - x0s) > 0.3 * ow:
+            box = (x0s, y0s, x1s, y1s)
 
-    y0s, y1s = _longest_run(row_frac > dark_ratio)
-    x0s, x1s = _longest_run(col_frac > dark_ratio)
+    if box is None:
+        box = (0, 0, ow - 1, oh - 1)
 
-    # securite : si la detection est absurde, on retombe sur toute l'image
-    if (y1s - y0s) < 0.3 * oh or (x1s - x0s) < 0.3 * ow:
-        x0s, y0s, x1s, y1s = 0, 0, ow - 1, oh - 1
-
+    x0s, y0s, x1s, y1s = box
     sx, sy = w / float(ow), h / float(oh)
     x0, x1 = int(round(x0s * sx)), int(round((x1s + 1) * sx))
     y0, y1 = int(round(y0s * sy)), int(round((y1s + 1) * sy))

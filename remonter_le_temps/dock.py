@@ -15,8 +15,9 @@ from qgis.PyQt.QtWidgets import (
 
 from qgis.core import (
     Qgis, QgsCoordinateReferenceSystem, QgsCoordinateTransform, QgsFeature,
-    QgsFillSymbol, QgsGeometry, QgsPointXY, QgsProject, QgsRasterLayer,
-    QgsRectangle, QgsTask, QgsApplication, QgsVectorLayer)
+    QgsFillSymbol, QgsGeometry, QgsMarkerSymbol, QgsPalLayerSettings,
+    QgsPointXY, QgsProject, QgsRasterLayer, QgsRectangle, QgsTask,
+    QgsTextFormat, QgsApplication, QgsVectorLayer, QgsVectorLayerSimpleLabeling)
 from qgis.gui import QgsFileWidget, QgsMapToolExtent, QgsProjectionSelectionWidget
 
 from . import deps, ign_api, pipeline
@@ -168,6 +169,7 @@ class RltDock(QDockWidget):
         self.setObjectName("RltDock")
         self._task = None
         self._basket = {}          # ident -> {"props":..., "ring":...}
+        self._missions = {}        # dataset_identifier -> entite GeoJSON
         self._previews = {}        # ident -> id de couche raster
         self._rect_tool = None
         self._prev_tool = None
@@ -545,10 +547,12 @@ class RltDock(QDockWidget):
                                                     self.year_max.value()),
                          feats, "255,140,0,255", "missions")
         self.cmb_mission.clear()
+        self._missions = {}
         rows = []
         for gj in feats:
             props = self._props_of(gj)
             ident = props.get("dataset_identifier") or props["image_identifier"]
+            self._missions[ident] = gj
             rows.append((year_of(props), ident))
         for year, ident in sorted(set(rows)):
             self.cmb_mission.addItem(u"%s  %s" % (year, ident), ident)
@@ -565,6 +569,7 @@ class RltDock(QDockWidget):
                                     u"une mission.")
                 return
             self.say(u"Chargement du tableau d'assemblage de %s..." % dataset)
+            self._show_mission_extent(dataset)
         else:
             self.say(u"Chargement de tous les cliches de l'emprise...")
         task = FetchTask("cliches", self.canvas_bbox_3857(), dataset=dataset)
@@ -572,6 +577,58 @@ class RltDock(QDockWidget):
         task.taskCompleted.connect(lambda: self._cliches_done(task, dataset))
         task.taskTerminated.connect(lambda: self._failed(task))
         self._start(task)
+
+    def _show_mission_extent(self, dataset):
+        """Emprise de la mission choisie, en evidence."""
+        gj = self._missions.get(dataset)
+        if gj is None:
+            return
+        name = u"PVA - Emprise mission %s" % dataset
+        for lyr in list(QgsProject.instance().mapLayers().values()):
+            if lyr.customProperty("rlt_type") == "emprise":
+                QgsProject.instance().removeMapLayer(lyr.id())
+        layer = self._make_layer(name, [gj], "227,26,28,255", "emprise")
+        layer.renderer().setSymbol(QgsFillSymbol.createSimple({
+            "color": "227,26,28,25", "outline_color": "227,26,28,255",
+            "outline_width": "1.2"}))
+        layer.triggerRepaint()
+
+    def _make_centres_layer(self, feats, dataset):
+        """Centres des cliches, avec le numero en etiquette."""
+        uri = "Point?crs=EPSG:3857&field=image_identifier:string&field=numero:string"
+        layer = QgsVectorLayer(uri, u"PVA - Centres cliches %s"
+                               % (dataset or u"emprise"), "memory")
+        rows = []
+        for gj in feats:
+            ring = self._ring_of(gj)
+            if not ring:
+                continue
+            props = self._props_of(gj)
+            cx, cy = centroid_of(ring)
+            feat = QgsFeature(layer.fields())
+            feat.setGeometry(QgsGeometry.fromPointXY(QgsPointXY(cx, cy)))
+            feat.setAttribute("image_identifier", props.get("image_identifier"))
+            label = props.get("numero")
+            if label in (None, ""):
+                label = str(props.get("image_identifier", ""))[-4:]
+            feat.setAttribute("numero", str(label))
+            rows.append(feat)
+        layer.dataProvider().addFeatures(rows)
+        layer.updateExtents()
+        layer.renderer().setSymbol(QgsMarkerSymbol.createSimple({
+            "name": "cross_fill", "color": "255,255,255,255",
+            "outline_color": "20,20,20,255", "size": "2.4"}))
+
+        settings = QgsPalLayerSettings()
+        settings.fieldName = "numero"
+        fmt = QgsTextFormat()
+        fmt.setSize(8)
+        settings.setFormat(fmt)
+        layer.setLabeling(QgsVectorLayerSimpleLabeling(settings))
+        layer.setLabelsEnabled(True)
+        layer.setCustomProperty("rlt_type", "centres")
+        QgsProject.instance().addMapLayer(layer)
+        return layer
 
     def _cliches_done(self, task, dataset):
         self._busy(False)
@@ -581,6 +638,7 @@ class RltDock(QDockWidget):
             return
         self._make_layer(u"PVA - Cliches %s" % (dataset or u"emprise"),
                          feats, "0,120,255,255", "cliches")
+        self._make_centres_layer(feats, dataset)
         self.say(u"%d cliche(s) affiche(s). Tracez un rectangle pour remplir "
                  u"le panier." % len(feats))
 
@@ -659,10 +717,11 @@ class RltDock(QDockWidget):
             node_y = groups.get(year)
             if node_y is None:
                 node_y = QTreeWidgetItem(self.tree, [year])
+                node_y.setData(0, USER_ROLE + 1, "year")
                 node_y.setFlags(ITEM_ENABLED | ITEM_SELECTABLE |
                                 ITEM_CHECKABLE | ITEM_AUTOTRISTATE)
                 node_y.setCheckState(0, CHECKED)
-                node_y.setExpanded(True)
+                node_y.setExpanded(False)      # replie par annee
                 groups[year] = node_y
             key = (year, mission)
             node_m = groups.get(key)
@@ -671,7 +730,7 @@ class RltDock(QDockWidget):
                 node_m.setFlags(ITEM_ENABLED | ITEM_SELECTABLE |
                                 ITEM_CHECKABLE | ITEM_AUTOTRISTATE)
                 node_m.setCheckState(0, CHECKED)
-                node_m.setExpanded(True)
+                node_m.setExpanded(False)
                 groups[key] = node_m
 
             cx, cy = centroid_of(entry["ring"])
@@ -689,6 +748,17 @@ class RltDock(QDockWidget):
             item.setToolTip(0, u"\n".join(
                 u"%s : %s" % (k, v) for k, v in sorted(props.items())
                 if v not in (None, "")))
+        # suffixe le nombre de cliches sur chaque niveau replie
+        for i in range(self.tree.topLevelItemCount()):
+            node_y = self.tree.topLevelItem(i)
+            total = 0
+            for j in range(node_y.childCount()):
+                node_m = node_y.child(j)
+                total += node_m.childCount()
+                node_m.setText(0, u"%s  (%d)"
+                               % (node_m.text(0), node_m.childCount()))
+            node_y.setText(0, u"%s  -  %d cliche(s)" % (node_y.text(0), total))
+
         self.tree.blockSignals(False)
         self.tree.setHeaderLabels([u"Panier (%d cliches)" % len(self._basket)])
 

@@ -3,6 +3,26 @@
 Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/) et le
 versionnement sémantique.
 
+## [1.4.0] - 2026-08-11
+
+### Corrigé
+- **Découpe du cadre** : la détection reposait sur la luminosité et ne voyait
+  rien quand le pourtour du scan est gris ou clair, laissant les repères de
+  fond de chambre dans l'image et faussant le calage. Elle s'appuie désormais
+  sur l'énergie de gradient (la zone photographiée se distingue par sa
+  texture, pas par sa luminosité), avec repli sur l'ancien critère.
+
+### Ajouté
+- Contrôle de cohérence du calage métrique contre l'emprise du tableau
+  d'assemblage : un écart de centre ou d'échelle aberrant fait basculer sur
+  l'ajustement d'emprise et l'écart est journalisé.
+- Couche **Emprise mission** mise en évidence dès qu'une mission est choisie.
+- Couche **Centres clichés**, étiquetée par numéro de cliché.
+
+### Modifié
+- Le panier s'ouvre replié par année, avec le nombre de clichés par année et
+  par mission.
+
 ## [1.3.2] - 2026-08-11
 
 ### Corrigé

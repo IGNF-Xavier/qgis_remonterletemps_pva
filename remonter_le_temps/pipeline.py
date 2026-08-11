@@ -163,7 +163,43 @@ def _metric_gcps(props, pitch_m, decim, img_size, full_size, crop_offset,
     _log(feedback, u"  echelle 1/%d -> %.3f m/px au sol" % (round(scale), gsd))
     gcps = georef.gcps_from_metric(img_size, centre, gsd, north,
                                    crop_offset, full_size)
+
+    # garde-fou : le calage metrique doit rester compatible avec l'emprise du
+    # tableau d'assemblage. Un ecart enorme signale une metadonnee mal lue
+    # (echelle, unite de resolution, centre) plutot qu'une emprise imprecise.
+    ok, note = _sanity_check(gcps, ground)
+    _log(feedback, u"  %s" % note)
+    if not ok:
+        return None
     return gcps, gsd
+
+
+def _sanity_check(gcps, ground, max_centre_ratio=0.75, size_range=(0.5, 2.0)):
+    """Compare le calage metrique a l'emprise IGN. Retourne (ok, message)."""
+    import math as _math
+
+    quad = [(g.GCPX, g.GCPY) for g in gcps[:4]]
+    def centre(pts):
+        return (sum(p[0] for p in pts) / len(pts),
+                sum(p[1] for p in pts) / len(pts))
+    def diag(pts):
+        return max(_math.hypot(a[0] - b[0], a[1] - b[1])
+                   for a in pts for b in pts)
+
+    cm, cf = centre(quad), centre(ground)
+    dm, df = diag(quad), diag(ground)
+    if df <= 0:
+        return True, u"emprise IGN inexploitable, calage metrique conserve"
+
+    shift = _math.hypot(cm[0] - cf[0], cm[1] - cf[1])
+    ratio = dm / df
+    msg = (u"controle : centre a %.0f m de l'emprise IGN, taille x%.2f"
+           % (shift, ratio))
+    if shift > max_centre_ratio * df:
+        return False, msg + u" -> incoherent, repli sur l'emprise IGN"
+    if not (size_range[0] <= ratio <= size_range[1]):
+        return False, msg + u" -> echelle suspecte, repli sur l'emprise IGN"
+    return True, msg
 
 
 def _rotation_steps(props, img_size, ground, opt, feedback=None):

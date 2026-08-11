@@ -117,12 +117,18 @@ Sortie :
 
 ## Découpe des bords
 
-Les scans argentiques comportent un liseré noir, les repères de fond de chambre
-et parfois un bandeau (numéro de mission, horloge, niveau à bulle). Le mode
-*automatique* binarise une version réduite de l'image, cherche le plus long bloc
-contigu de lignes et de colonnes « claires », puis retranche une marge de
-sécurité (1,5 % par défaut) pour éliminer les repères qui mordent sur l'image.
-Le mode *marge fixe* est là pour les cas atypiques.
+Les scans argentiques comportent un pourtour de film, les repères de fond de
+chambre et parfois un bandeau (numéro de mission, horloge, niveau à bulle).
+Selon les campagnes ce pourtour est noir, gris ou clair : se fier à la
+luminosité échoue une fois sur deux. Le mode *automatique* cherche donc le plus
+long bloc contigu de lignes et de colonnes à forte **énergie de gradient** — la
+zone photographiée se distingue par sa texture, le pourtour est lisse — puis
+retranche une marge de sécurité (2 % par défaut) pour éliminer les repères qui
+mordent sur l'image. En cas d'échec, l'ancien critère de luminosité prend le
+relais, et le mode *marge fixe* reste disponible pour les cas atypiques.
+
+Vérifiez le résultat : si des repères noirs subsistent aux coins du cliché
+calé, la découpe n'a pas fonctionné et le calage en pâtira.
 
 ## Les trois niveaux de calage
 
