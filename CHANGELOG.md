@@ -5,6 +5,11 @@ versionnement sémantique.
 
 ## [1.3.0] - 2026-08-11
 
+### Documentation
+- Statut **expérimental** annoncé explicitement en tête du README : le code
+  n'a pas été exécuté dans QGIS ni contre les serveurs IGN, seules les briques
+  géométriques sont validées numériquement.
+
 ### Ajouté
 - **Calage métrique** : la taille pixel au sol est déduite des tags TIFF de
   résolution du scan (avec gestion de `ResolutionUnit` pouce/centimètre) et de
