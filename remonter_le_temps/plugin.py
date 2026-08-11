@@ -3,10 +3,10 @@
 
 import os
 
-from qgis.PyQt.QtCore import Qt
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import QAction
 
+from .compat import RIGHT_DOCK
 from .dock import RltDock
 
 PLUGIN_DIR = os.path.dirname(__file__)
@@ -42,7 +42,7 @@ class RltPlugin(object):
     def toggle(self, checked):
         if self.dock is None:
             self.dock = RltDock(self.iface, self.iface.mainWindow())
-            self.iface.addDockWidget(Qt.RightDockWidgetArea, self.dock)
+            self.iface.addDockWidget(RIGHT_DOCK, self.dock)
             self.dock.visibilityChanged.connect(self._sync)
         self.dock.setVisible(checked)
 

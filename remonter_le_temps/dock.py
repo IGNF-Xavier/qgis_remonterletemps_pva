@@ -1,45 +1,53 @@
 # -*- coding: utf-8 -*-
 """Panneau lateral du plugin."""
 
+import json
 import os
 import traceback
 
-from qgis.PyQt.QtCore import Qt, pyqtSignal
-from qgis.PyQt.QtGui import QColor
+from qgis.PyQt.QtCore import pyqtSignal
 from qgis.PyQt.QtWidgets import (
     QCheckBox, QComboBox, QDockWidget, QDoubleSpinBox, QFormLayout, QGroupBox,
     QHBoxLayout, QLabel, QMessageBox, QProgressBar, QPlainTextEdit,
-    QPushButton, QSpinBox, QVBoxLayout, QWidget)
+    QPushButton, QSlider, QSpinBox, QTabWidget, QTreeWidget, QTreeWidgetItem,
+    QVBoxLayout, QWidget)
 
 from qgis.core import (
     Qgis, QgsCoordinateReferenceSystem, QgsCoordinateTransform, QgsFeature,
-    QgsField, QgsFillSymbol, QgsGeometry, QgsPointXY, QgsProject,
-    QgsRasterLayer, QgsTask, QgsApplication, QgsVectorLayer)
-from qgis.gui import QgsFileWidget, QgsProjectionSelectionWidget
-
-from qgis.PyQt.QtCore import QVariant
+    QgsFillSymbol, QgsGeometry, QgsPointXY, QgsProject, QgsRasterLayer,
+    QgsRectangle, QgsTask, QgsApplication, QgsVectorLayer)
+from qgis.gui import QgsFileWidget, QgsMapToolExtent, QgsProjectionSelectionWidget
 
 from . import deps, ign_api, pipeline
+from .compat import (CHECKED, HORIZONTAL, ITEM_AUTOTRISTATE, ITEM_CHECKABLE,
+                     ITEM_ENABLED, ITEM_SELECTABLE, MB_CANCEL, MB_NO, MB_YES,
+                     PARTIAL, UNCHECKED, USER_ROLE)
 
-MISSION_FIELDS = [
-    ("dataset_identifier", QVariant.String),
-    ("dataset_idta", QVariant.String),
-    ("date_mission", QVariant.String),
-    ("titre", QVariant.String),
-    ("support", QVariant.String),
-    ("couleur", QVariant.String),
-    ("resolution", QVariant.Double),
-    ("focale", QVariant.Double),
-]
+ORIENT_KEYS = ("orientation", "orientation_nord", "azimut", "azimuth",
+               "cap", "angle", "rotation")
+DATE_KEYS = ("date_cliche", "date_mission", "date")
 
-CLICHE_FIELDS = [
-    ("image_identifier", QVariant.String),
-    ("dataset_identifier", QVariant.String),
-    ("date_cliche", QVariant.String),
-    ("numero", QVariant.String),
-    ("x", QVariant.Double),
-    ("y", QVariant.Double),
-]
+
+# ==========================================================================
+# utilitaires metadonnees
+# ==========================================================================
+def prop(props, keys, default=None):
+    for key in keys:
+        if props.get(key) not in (None, ""):
+            return props[key]
+    return default
+
+
+def year_of(props):
+    date = prop(props, DATE_KEYS, "")
+    text = str(date)[:4]
+    return text if text.isdigit() else u"annee inconnue"
+
+
+def centroid_of(ring):
+    xs = [p[0] for p in ring[:-1]] or [p[0] for p in ring]
+    ys = [p[1] for p in ring[:-1]] or [p[1] for p in ring]
+    return sum(xs) / len(xs), sum(ys) / len(ys)
 
 
 # ==========================================================================
@@ -47,8 +55,7 @@ CLICHE_FIELDS = [
 # ==========================================================================
 class FetchTask(QgsTask):
     def __init__(self, kind, bbox, year_min=None, year_max=None, dataset=None):
-        QgsTask.__init__(self, u"Remonter le temps : %s" % kind,
-                         QgsTask.CanCancel)
+        QgsTask.__init__(self, u"Remonter le temps : %s" % kind, QgsTask.CanCancel)
         self.kind = kind
         self.bbox = bbox
         self.year_min = year_min
@@ -136,20 +143,44 @@ class RltDock(QDockWidget):
         self.iface = iface
         self.setObjectName("RltDock")
         self._task = None
+        self._basket = {}          # ident -> {"props":..., "ring":...}
+        self._previews = {}        # ident -> id de couche raster
+        self._rect_tool = None
+        self._prev_tool = None
         self._build_ui()
 
-    # ---------------------------------------------------------------- UI
+    # ------------------------------------------------------------------ UI
     def _build_ui(self):
         root = QWidget()
         lay = QVBoxLayout(root)
         lay.setContentsMargins(6, 6, 6, 6)
 
-        # --- dependances
-        g0 = QGroupBox(u"0. Moteur de recalage")
-        f0 = QVBoxLayout(g0)
+        self.tabs = QTabWidget()
+        self.tabs.addTab(self._tab_search(), u"Recherche")
+        self.tabs.addTab(self._tab_basket(), u"Panier")
+        self.tabs.addTab(self._tab_process(), u"Traitement")
+        lay.addWidget(self.tabs, 1)
+
+        self.progress = QProgressBar()
+        lay.addWidget(self.progress)
+        self.log = QPlainTextEdit()
+        self.log.setReadOnly(True)
+        self.log.setMaximumBlockCount(2000)
+        self.log.setMinimumHeight(90)
+        lay.addWidget(self.log)
+
+        self.setWidget(root)
+        self.refresh_deps()
+
+    def _tab_search(self):
+        page = QWidget()
+        lay = QVBoxLayout(page)
+
+        gdep = QGroupBox(u"Moteur de recalage")
+        vdep = QVBoxLayout(gdep)
         self.lbl_dep = QLabel()
         self.lbl_dep.setWordWrap(True)
-        f0.addWidget(self.lbl_dep)
+        vdep.addWidget(self.lbl_dep)
         hdep = QHBoxLayout()
         self.btn_install = QPushButton(u"Installer OpenCV")
         self.btn_install.clicked.connect(self.install_opencv)
@@ -157,11 +188,10 @@ class RltDock(QDockWidget):
         self.btn_uninstall = QPushButton(u"Retirer")
         self.btn_uninstall.clicked.connect(self.uninstall_opencv)
         hdep.addWidget(self.btn_uninstall)
-        f0.addLayout(hdep)
-        lay.addWidget(g0)
+        vdep.addLayout(hdep)
+        lay.addWidget(gdep)
 
-        # --- tableau d'assemblage
-        g1 = QGroupBox(u"1. Tableau d'assemblage")
+        g1 = QGroupBox(u"Tableau d'assemblage")
         f1 = QFormLayout(g1)
         self.year_min = QSpinBox()
         self.year_min.setRange(1900, 2100)
@@ -175,22 +205,70 @@ class RltDock(QDockWidget):
         hy.addWidget(self.year_max)
         f1.addRow(u"Periode", hy)
 
-        self.btn_missions = QPushButton(u"Charger les missions (emprise carte)")
+        self.btn_missions = QPushButton(u"Scanner l'emprise actuelle (missions)")
         self.btn_missions.clicked.connect(self.load_missions)
         f1.addRow(self.btn_missions)
 
-        self.btn_cliches = QPushButton(u"Charger les cliches des missions selectionnees")
+        self.cmb_mission = QComboBox()
+        self.cmb_mission.setMinimumContentsLength(18)
+        f1.addRow(u"Mission", self.cmb_mission)
+
+        self.btn_cliches = QPushButton(u"Charger les cliches de la mission")
         self.btn_cliches.clicked.connect(self.load_cliches)
         f1.addRow(self.btn_cliches)
 
         self.btn_cliches_all = QPushButton(u"...ou tous les cliches de l'emprise")
-        self.btn_cliches_all.clicked.connect(lambda: self.load_cliches(all_missions=True))
+        self.btn_cliches_all.clicked.connect(lambda: self.load_cliches(True))
         f1.addRow(self.btn_cliches_all)
+
+        self.btn_rect = QPushButton(u"Tracer un rectangle -> panier")
+        self.btn_rect.setCheckable(True)
+        self.btn_rect.clicked.connect(self.toggle_rect_tool)
+        f1.addRow(self.btn_rect)
         lay.addWidget(g1)
 
-        # --- traitement
-        g2 = QGroupBox(u"2. Decoupe et calage")
-        f2 = QFormLayout(g2)
+        lay.addStretch(1)
+        return page
+
+    def _tab_basket(self):
+        page = QWidget()
+        lay = QVBoxLayout(page)
+
+        self.tree = QTreeWidget()
+        self.tree.setHeaderLabels([u"Annee / mission / cliche"])
+        self.tree.setAlternatingRowColors(True)
+        self.tree.itemChanged.connect(self._item_changed)
+        lay.addWidget(self.tree, 1)
+
+        h1 = QHBoxLayout()
+        self.btn_preview = QPushButton(u"Apercu du cliche")
+        self.btn_preview.clicked.connect(self.preview_current)
+        h1.addWidget(self.btn_preview)
+        self.btn_clean = QPushButton(u"Nettoyer decoches")
+        self.btn_clean.clicked.connect(self.clean_unchecked)
+        h1.addWidget(self.btn_clean)
+        self.btn_empty = QPushButton(u"Vider")
+        self.btn_empty.clicked.connect(self.empty_basket)
+        h1.addWidget(self.btn_empty)
+        lay.addLayout(h1)
+
+        h2 = QHBoxLayout()
+        h2.addWidget(QLabel(u"Opacite"))
+        self.sld_opacity = QSlider(HORIZONTAL)
+        self.sld_opacity.setRange(0, 100)
+        self.sld_opacity.setValue(100)
+        self.sld_opacity.valueChanged.connect(self._apply_opacity)
+        h2.addWidget(self.sld_opacity, 1)
+        self.chk_180 = QCheckBox(u"180 deg")
+        self.chk_180.setToolTip(u"Retourne l'apercu : les scans IGN sont souvent "
+                                u"tete-beche par rapport a l'emprise.")
+        h2.addWidget(self.chk_180)
+        lay.addLayout(h2)
+        return page
+
+    def _tab_process(self):
+        page = QWidget()
+        f2 = QFormLayout(page)
 
         self.cmb_crop = QComboBox()
         self.cmb_crop.addItems([u"Aucune",
@@ -221,7 +299,6 @@ class RltDock(QDockWidget):
         self.spn_res = QDoubleSpinBox()
         self.spn_res.setRange(0.0, 50.0)
         self.spn_res.setDecimals(2)
-        self.spn_res.setValue(0.0)
         self.spn_res.setSpecialValueText(u"auto")
         self.spn_res.setSuffix(u" m/px")
         f2.addRow(u"Resolution", self.spn_res)
@@ -234,42 +311,32 @@ class RltDock(QDockWidget):
         self.out_dir.setStorageMode(QgsFileWidget.GetDirectory)
         f2.addRow(u"Dossier de sortie", self.out_dir)
 
+        self.chk_json = QCheckBox(u"Exporter les metadonnees .json")
+        self.chk_json.setChecked(True)
+        f2.addRow(self.chk_json)
+
         self.chk_add = QCheckBox(u"Ajouter les resultats au projet")
         self.chk_add.setChecked(True)
         f2.addRow(self.chk_add)
 
-        self.btn_run = QPushButton(u"Traiter les cliches selectionnes")
+        self.btn_run = QPushButton(u"Telecharger et traiter les cliches coches")
         self.btn_run.clicked.connect(self.run_processing)
         f2.addRow(self.btn_run)
-        lay.addWidget(g2)
+        return page
 
-        self.progress = QProgressBar()
-        self.progress.setValue(0)
-        lay.addWidget(self.progress)
-
-        self.log = QPlainTextEdit()
-        self.log.setReadOnly(True)
-        self.log.setMaximumBlockCount(2000)
-        lay.addWidget(self.log, 1)
-
-        self.setWidget(root)
-        self.refresh_deps()
-
-    # ----------------------------------------------------------- dependances
+    # --------------------------------------------------------- dependances
     def refresh_deps(self):
         if deps.have_cv2():
             self.lbl_dep.setText(
                 u"<b style='color:#2a7'>OpenCV %s detecte</b> - appariement "
-                u"AKAZE + RANSAC (precis, gere la rotation)."
-                % deps.cv2_version())
+                u"AKAZE + RANSAC." % deps.cv2_version())
             self.btn_install.setEnabled(False)
             self.btn_uninstall.setEnabled(os.path.isdir(deps.LIBS_DIR))
         else:
             self.lbl_dep.setText(
                 u"<b style='color:#c60'>OpenCV absent</b> - repli sur la "
-                u"correlation de phase (numpy, fonctionne sans rien installer, "
-                u"mais moins robuste). L'installation se fait dans le dossier "
-                u"de l'extension, sans toucher a l'installation Python de QGIS.")
+                u"correlation de phase (numpy). Installation confinee au "
+                u"dossier de l'extension.")
             self.btn_install.setEnabled(True)
             self.btn_uninstall.setEnabled(False)
 
@@ -295,13 +362,13 @@ class RltDock(QDockWidget):
         self.say(u"Dossier libs supprime. Redemarrez QGIS pour liberer OpenCV.")
         self.refresh_deps()
 
-    # ------------------------------------------------------------ helpers
+    # -------------------------------------------------------------- helpers
     def say(self, msg):
         self.log.appendPlainText(msg)
 
-    def canvas_bbox_3857(self):
+    def canvas_bbox_3857(self, rect=None):
         canvas = self.iface.mapCanvas()
-        extent = canvas.extent()
+        extent = rect if rect is not None else canvas.extent()
         src = canvas.mapSettings().destinationCrs()
         dst = QgsCoordinateReferenceSystem("EPSG:3857")
         if src != dst:
@@ -310,42 +377,79 @@ class RltDock(QDockWidget):
         return (extent.xMinimum(), extent.yMinimum(),
                 extent.xMaximum(), extent.yMaximum())
 
-    def _make_layer(self, name, fields, features, color, rlt_type):
+    def _busy(self, state):
+        for b in (self.btn_missions, self.btn_cliches, self.btn_cliches_all,
+                  self.btn_run, self.btn_install, self.btn_uninstall,
+                  self.btn_preview):
+            b.setEnabled(not state)
+        if not state:
+            self.refresh_deps()
+
+    def _start(self, task):
+        self._busy(True)
+        self.progress.setValue(0)
+        self._task = task
+        QgsApplication.taskManager().addTask(task)
+
+    def _failed(self, task):
+        self._busy(False)
+        self.say(u"ERREUR : %s" % (task.error or u"Tache annulee."))
+
+    # ------------------------------------------------------- couches memoire
+    @staticmethod
+    def _ring_of(gj):
+        geom = gj.get("geometry") or {}
+        coords = geom.get("coordinates")
+        if not coords:
+            return None
+        if geom.get("type") == "Polygon":
+            return [(float(c[0]), float(c[1])) for c in coords[0]]
+        return [(float(c[0]), float(c[1])) for c in coords[0][0]]
+
+    @staticmethod
+    def _props_of(gj):
+        props = dict(gj.get("properties") or {})
+        ident = (gj.get("id") or "").split(".", 1)[-1]
+        props.setdefault("image_identifier", ident)
+        return props
+
+    def _make_layer(self, name, features, color, rlt_type):
+        """Couche memoire dont les champs sont deduits des donnees WFS."""
+        keys, numeric = [], set()
+        for gj in features[:200]:
+            for k, v in (gj.get("properties") or {}).items():
+                if k not in keys:
+                    keys.append(k)
+                if isinstance(v, (int, float)) and not isinstance(v, bool):
+                    numeric.add(k)
+                elif v is not None:
+                    numeric.discard(k)
+        for extra in ("image_identifier", "dataset_identifier"):
+            if extra not in keys:
+                keys.append(extra)
+
         uri = "Polygon?crs=EPSG:3857"
-        for fname, ftype in fields:
-            uri += "&field=%s:%s" % (
-                fname, "double" if ftype == QVariant.Double else "string")
+        for k in keys:
+            uri += "&field=%s:%s" % (k, "double" if k in numeric else "string")
         layer = QgsVectorLayer(uri, name, "memory")
-        prov = layer.dataProvider()
 
         feats = []
         for gj in features:
-            geom = gj.get("geometry") or {}
-            coords = geom.get("coordinates")
-            if not coords:
+            ring = self._ring_of(gj)
+            if not ring:
                 continue
-            rings = coords[0] if geom.get("type") == "Polygon" else coords[0][0]
-            pts = [QgsPointXY(float(c[0]), float(c[1])) for c in rings]
+            props = self._props_of(gj)
             feat = QgsFeature(layer.fields())
-            feat.setGeometry(QgsGeometry.fromPolygonXY([pts]))
-            props = gj.get("properties", {})
-            ident = (gj.get("id") or "").split(".", 1)[-1]
-            for fname, ftype in fields:
-                val = props.get(fname)
-                if val is None and fname in ("image_identifier",
-                                             "dataset_identifier"):
-                    val = ident
-                feat.setAttribute(fname, val)
+            feat.setGeometry(QgsGeometry.fromPolygonXY(
+                [[QgsPointXY(x, y) for x, y in ring]]))
+            for k in keys:
+                feat.setAttribute(k, props.get(k))
             feats.append(feat)
-
-        prov.addFeatures(feats)
+        layer.dataProvider().addFeatures(feats)
         layer.updateExtents()
-        sym = QgsFillSymbol.createSimple({
-            "color": "0,0,0,0",
-            "outline_color": color,
-            "outline_width": "0.5",
-        })
-        layer.renderer().setSymbol(sym)
+
+        layer.renderer().setSymbol(QgsFillSymbol.createSimple({
+            "color": "0,0,0,0", "outline_color": color, "outline_width": "0.5"}))
         layer.setCustomProperty("rlt_type", rlt_type)
         QgsProject.instance().addMapLayer(layer)
         return layer
@@ -360,19 +464,10 @@ class RltDock(QDockWidget):
                 return lyr
         return None
 
-    def _busy(self, state):
-        for b in (self.btn_missions, self.btn_cliches,
-                  self.btn_cliches_all, self.btn_run, self.btn_install,
-                  self.btn_uninstall):
-            b.setEnabled(not state)
-        if not state:
-            self.refresh_deps()
-
-    # ------------------------------------------------------------ actions
+    # ------------------------------------------------------------- recherche
     def load_missions(self):
-        bbox = self.canvas_bbox_3857()
-        self.say(u"Recherche des missions sur l'emprise courante...")
-        task = FetchTask("missions", bbox,
+        self.say(u"Scan des missions sur l'emprise courante...")
+        task = FetchTask("missions", self.canvas_bbox_3857(),
                          self.year_min.value(), self.year_max.value())
         task.progressChanged.connect(lambda v: self.progress.setValue(int(v)))
         task.taskCompleted.connect(lambda: self._missions_done(task))
@@ -385,33 +480,33 @@ class RltDock(QDockWidget):
         if not feats:
             self.say(u"Aucune mission sur cette emprise / periode.")
             return
-        name = u"PVA - Missions %d-%d" % (self.year_min.value(),
-                                          self.year_max.value())
-        self._make_layer(name, MISSION_FIELDS, feats, "255,140,0,255", "missions")
-        self.say(u"%d mission(s) chargee(s). Selectionnez-en une puis chargez "
-                 u"ses cliches." % len(feats))
+        self._make_layer(u"PVA - Missions %d-%d" % (self.year_min.value(),
+                                                    self.year_max.value()),
+                         feats, "255,140,0,255", "missions")
+        self.cmb_mission.clear()
+        rows = []
+        for gj in feats:
+            props = self._props_of(gj)
+            ident = props.get("dataset_identifier") or props["image_identifier"]
+            rows.append((year_of(props), ident))
+        for year, ident in sorted(set(rows)):
+            self.cmb_mission.addItem(u"%s  %s" % (year, ident), ident)
+        self.say(u"%d mission(s). Choisissez-en une, puis chargez ses cliches."
+                 % len(feats))
 
     def load_cliches(self, all_missions=False):
-        bbox = self.canvas_bbox_3857()
         dataset = None
         if not all_missions:
-            lyr = self._find_layer("missions")
-            if lyr is None:
-                QMessageBox.warning(self, u"Missions",
-                                    u"Chargez d'abord la couche des missions.")
+            dataset = self.cmb_mission.currentData()
+            if not dataset:
+                QMessageBox.warning(self, u"Mission",
+                                    u"Scannez d'abord l'emprise, puis choisissez "
+                                    u"une mission.")
                 return
-            sel = lyr.selectedFeatures()
-            if not sel:
-                QMessageBox.warning(self, u"Missions",
-                                    u"Selectionnez une mission dans la couche.")
-                return
-            dataset = sel[0]["dataset_identifier"]
-            self.say(u"Chargement du tableau d'assemblage de la mission %s..."
-                     % dataset)
+            self.say(u"Chargement du tableau d'assemblage de %s..." % dataset)
         else:
             self.say(u"Chargement de tous les cliches de l'emprise...")
-
-        task = FetchTask("cliches", bbox, dataset=dataset)
+        task = FetchTask("cliches", self.canvas_bbox_3857(), dataset=dataset)
         task.progressChanged.connect(lambda v: self.progress.setValue(int(v)))
         task.taskCompleted.connect(lambda: self._cliches_done(task, dataset))
         task.taskTerminated.connect(lambda: self._failed(task))
@@ -423,47 +518,204 @@ class RltDock(QDockWidget):
         if not feats:
             self.say(u"Aucun cliche trouve.")
             return
-        name = u"PVA - Cliches %s" % (dataset or u"emprise")
-        self._make_layer(name, CLICHE_FIELDS, feats, "0,120,255,255", "cliches")
-        self.say(u"%d cliche(s). Selectionnez ceux a traiter, puis lancez "
-                 u"le traitement." % len(feats))
+        self._make_layer(u"PVA - Cliches %s" % (dataset or u"emprise"),
+                         feats, "0,120,255,255", "cliches")
+        self.say(u"%d cliche(s) affiche(s). Tracez un rectangle pour remplir "
+                 u"le panier." % len(feats))
 
-    def run_processing(self):
-        lyr = self._find_layer("cliches")
-        if lyr is None:
-            QMessageBox.warning(self, u"Cliches",
-                                u"Chargez d'abord une couche de cliches.")
+    # -------------------------------------------------- selection rectangle
+    def toggle_rect_tool(self, checked):
+        canvas = self.iface.mapCanvas()
+        if not checked:
+            if self._prev_tool is not None:
+                canvas.setMapTool(self._prev_tool)
             return
-        feats = lyr.selectedFeatures() or list(lyr.getFeatures())
-        if not feats:
-            QMessageBox.warning(self, u"Cliches", u"Aucun cliche a traiter.")
+        if self._rect_tool is None:
+            self._rect_tool = QgsMapToolExtent(canvas)
+            self._rect_tool.extentChanged.connect(self._rect_drawn)
+        self._prev_tool = canvas.mapTool()
+        canvas.setMapTool(self._rect_tool)
+        self.say(u"Tracez un rectangle sur la carte.")
+
+    def _rect_drawn(self, rect):
+        self.btn_rect.setChecked(False)
+        self.toggle_rect_tool(False)
+        if rect is None or rect.isEmpty():
+            return
+        bbox = self.canvas_bbox_3857(QgsRectangle(rect))
+        layer = self._find_layer("cliches")
+        if layer is None:
+            self.say(u"Aucune couche de cliches : interrogation du WFS sur le "
+                     u"rectangle...")
+            task = FetchTask("cliches", bbox)
+            task.taskCompleted.connect(lambda: self._rect_from_wfs(task))
+            task.taskTerminated.connect(lambda: self._failed(task))
+            self._start(task)
+            return
+
+        sel = QgsGeometry.fromRect(QgsRectangle(*bbox))
+        added = 0
+        for feat in layer.getFeatures():
+            if not feat.geometry().intersects(sel):
+                continue
+            props = {f.name(): feat[f.name()] for f in layer.fields()}
+            poly = feat.geometry().asPolygon()
+            if not poly:
+                continue
+            ring = [(p.x(), p.y()) for p in poly[0]]
+            added += self._add_to_basket(props, ring)
+        self.say(u"%d cliche(s) ajoute(s) au panier." % added)
+        self.rebuild_tree()
+        self.tabs.setCurrentIndex(1)
+
+    def _rect_from_wfs(self, task):
+        self._busy(False)
+        added = 0
+        for gj in task.data.get("features", []):
+            ring = self._ring_of(gj)
+            if ring:
+                added += self._add_to_basket(self._props_of(gj), ring)
+        self.say(u"%d cliche(s) ajoute(s) au panier." % added)
+        self.rebuild_tree()
+        self.tabs.setCurrentIndex(1)
+
+    # ----------------------------------------------------------------- panier
+    def _add_to_basket(self, props, ring):
+        ident = props.get("image_identifier")
+        if not ident or ident in self._basket:
+            return 0
+        self._basket[ident] = {"props": props, "ring": ring, "checked": True}
+        return 1
+
+    def rebuild_tree(self):
+        self.tree.blockSignals(True)
+        self.tree.clear()
+        groups = {}
+        for ident, entry in sorted(self._basket.items()):
+            props = entry["props"]
+            year = year_of(props)
+            mission = props.get("dataset_identifier") or u"mission inconnue"
+            node_y = groups.get(year)
+            if node_y is None:
+                node_y = QTreeWidgetItem(self.tree, [year])
+                node_y.setFlags(ITEM_ENABLED | ITEM_SELECTABLE |
+                                ITEM_CHECKABLE | ITEM_AUTOTRISTATE)
+                node_y.setCheckState(0, CHECKED)
+                node_y.setExpanded(True)
+                groups[year] = node_y
+            key = (year, mission)
+            node_m = groups.get(key)
+            if node_m is None:
+                node_m = QTreeWidgetItem(node_y, [mission])
+                node_m.setFlags(ITEM_ENABLED | ITEM_SELECTABLE |
+                                ITEM_CHECKABLE | ITEM_AUTOTRISTATE)
+                node_m.setCheckState(0, CHECKED)
+                node_m.setExpanded(True)
+                groups[key] = node_m
+
+            cx, cy = centroid_of(entry["ring"])
+            orient = prop(props, ORIENT_KEYS)
+            legend = u"centre %.0f / %.0f (3857)" % (cx, cy)
+            if orient is not None:
+                try:
+                    legend += u" - orientation %.0f deg" % float(orient)
+                except (TypeError, ValueError):
+                    legend += u" - orientation %s" % orient
+            item = QTreeWidgetItem(node_m, [u"%s\n    %s" % (ident, legend)])
+            item.setFlags(ITEM_ENABLED | ITEM_SELECTABLE | ITEM_CHECKABLE)
+            item.setCheckState(0, CHECKED if entry["checked"] else UNCHECKED)
+            item.setData(0, USER_ROLE, ident)
+            item.setToolTip(0, u"\n".join(
+                u"%s : %s" % (k, v) for k, v in sorted(props.items())
+                if v not in (None, "")))
+        self.tree.blockSignals(False)
+        self.tree.setHeaderLabels([u"Panier (%d cliches)" % len(self._basket)])
+
+    def _item_changed(self, item, _column):
+        ident = item.data(0, USER_ROLE)
+        if ident and ident in self._basket:
+            self._basket[ident]["checked"] = item.checkState(0) == CHECKED
+
+    def _current_ident(self):
+        item = self.tree.currentItem()
+        if item is None:
+            return None
+        return item.data(0, USER_ROLE)
+
+    def clean_unchecked(self):
+        gone = [k for k, v in self._basket.items() if not v["checked"]]
+        for k in gone:
+            self._remove_preview(k)
+            del self._basket[k]
+        self.say(u"%d cliche(s) retire(s) du panier." % len(gone))
+        self.rebuild_tree()
+
+    def empty_basket(self):
+        for ident in list(self._basket):
+            self._remove_preview(ident)
+        self._basket.clear()
+        self.rebuild_tree()
+
+    # ----------------------------------------------------------------- apercu
+    def preview_current(self):
+        ident = self._current_ident()
+        if not ident:
+            QMessageBox.information(self, u"Apercu",
+                                    u"Selectionnez un cliche dans le panier.")
+            return
+        if ident in self._previews:
+            self._remove_preview(ident)
+            self.say(u"Apercu retire : %s" % ident)
             return
         outdir = self.out_dir.filePath()
         if not outdir:
             QMessageBox.warning(self, u"Sortie",
-                                u"Choisissez un dossier de sortie.")
+                                u"Choisissez un dossier de sortie (onglet "
+                                u"Traitement) : l'apercu telecharge le scan.")
             return
-        if len(feats) > 30:
-            rep = QMessageBox.question(
-                self, u"Volume",
-                u"%d cliches vont etre telecharges et traites. Continuer ?"
-                % len(feats))
-            if rep != QMessageBox.Yes:
-                return
 
-        if self.cmb_level.currentIndex() >= 1 and not deps.have_cv2():
-            rep = QMessageBox.question(
-                self, u"OpenCV",
-                u"Le recalage automatique est bien plus fiable avec OpenCV.\n\n"
-                u"L'installer maintenant dans le dossier de l'extension ?\n"
-                u"(Non = repli sur la correlation de phase en numpy)",
-                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel)
-            if rep == QMessageBox.Cancel:
-                return
-            if rep == QMessageBox.Yes:
-                self.install_opencv()
-                return
+        entry = self._basket[ident]
+        opt = self._options(outdir)
+        opt.level = pipeline.LEVEL_FOOTPRINT      # apercu = calage rapide
+        opt.rotation_steps = 2 if self.chk_180.isChecked() else 0
+        opt.build_ovr = True
 
+        self.say(u"Apercu de %s (telechargement du scan)..." % ident)
+        task = ProcessTask([(entry["props"], entry["ring"])], opt)
+        task.message.connect(self.say)
+        task.progressChanged.connect(lambda v: self.progress.setValue(int(v)))
+        task.taskCompleted.connect(lambda: self._preview_done(task, ident))
+        task.taskTerminated.connect(lambda: self._failed(task))
+        self._start(task)
+
+    def _preview_done(self, task, ident):
+        self._busy(False)
+        if not task.results:
+            self.say(u"Apercu indisponible.")
+            return
+        layer = QgsRasterLayer(task.results[0], u"apercu %s" % ident)
+        if not layer.isValid():
+            self.say(u"Raster d'apercu invalide.")
+            return
+        QgsProject.instance().addMapLayer(layer)
+        self._previews[ident] = layer.id()
+        self._apply_opacity(self.sld_opacity.value())
+
+    def _remove_preview(self, ident):
+        layer_id = self._previews.pop(ident, None)
+        if layer_id:
+            QgsProject.instance().removeMapLayer(layer_id)
+
+    def _apply_opacity(self, value):
+        for layer_id in self._previews.values():
+            layer = QgsProject.instance().mapLayer(layer_id)
+            if layer is None:
+                continue
+            layer.renderer().setOpacity(value / 100.0)
+            layer.triggerRepaint()
+
+    # ------------------------------------------------------------ traitement
+    def _options(self, outdir):
         opt = pipeline.Options()
         opt.outdir = outdir
         opt.out_crs = self.crs_widget.crs().authid() or "EPSG:2154"
@@ -473,32 +725,43 @@ class RltDock(QDockWidget):
         opt.fixed_margin = self.spn_margin.value() if opt.crop_mode == 2 else 8.0
         opt.resolution = self.spn_res.value()
         opt.rotation_steps = self.spn_rot.value()
+        opt.write_json = self.chk_json.isChecked()
+        return opt
 
-        items = []
-        for f in feats:
-            props = {
-                "image_identifier": f["image_identifier"],
-                "dataset_identifier": f["dataset_identifier"],
-            }
-            if not props["image_identifier"] or not props["dataset_identifier"]:
-                continue
-            geom = f.geometry()
-            pts = geom.asPolygon()
-            if not pts:
-                mp = geom.asMultiPolygon()
-                if not mp:
-                    continue
-                pts = mp[0]
-            ring = [(p.x(), p.y()) for p in pts[0]]
-            items.append((props, ring))
-
+    def run_processing(self):
+        items = [(v["props"], v["ring"])
+                 for v in self._basket.values() if v["checked"]]
         if not items:
-            QMessageBox.warning(self, u"Cliches",
-                                u"Attributs manquants sur la selection.")
+            QMessageBox.warning(self, u"Panier",
+                                u"Aucun cliche coche dans le panier.")
             return
+        outdir = self.out_dir.filePath()
+        if not outdir:
+            QMessageBox.warning(self, u"Sortie",
+                                u"Choisissez un dossier de sortie.")
+            return
+        if len(items) > 30:
+            rep = QMessageBox.question(
+                self, u"Volume",
+                u"%d cliches vont etre telecharges et traites. Continuer ?"
+                % len(items), MB_YES | MB_NO)
+            if rep != MB_YES:
+                return
+        if self.cmb_level.currentIndex() >= 1 and not deps.have_cv2():
+            rep = QMessageBox.question(
+                self, u"OpenCV",
+                u"Le recalage automatique est bien plus fiable avec OpenCV.\n\n"
+                u"L'installer maintenant dans le dossier de l'extension ?\n"
+                u"(Non = repli sur la correlation de phase en numpy)",
+                MB_YES | MB_NO | MB_CANCEL)
+            if rep == MB_CANCEL:
+                return
+            if rep == MB_YES:
+                self.install_opencv()
+                return
 
         self.say(u"--- Traitement de %d cliche(s) ---" % len(items))
-        task = ProcessTask(items, opt)
+        task = ProcessTask(items, self._options(outdir))
         task.message.connect(self.say)
         task.progressChanged.connect(lambda v: self.progress.setValue(int(v)))
         task.taskCompleted.connect(lambda: self._process_done(task))
@@ -510,21 +773,16 @@ class RltDock(QDockWidget):
         self.say(u"Termine : %d raster(s) produit(s)." % len(task.results))
         if self.chk_add.isChecked():
             for path in task.results:
-                rl = QgsRasterLayer(path, os.path.splitext(os.path.basename(path))[0])
-                if rl.isValid():
-                    QgsProject.instance().addMapLayer(rl)
+                name = os.path.splitext(os.path.basename(path))[0]
+                layer = QgsRasterLayer(path, name)
+                if layer.isValid():
+                    QgsProject.instance().addMapLayer(layer)
         self.iface.messageBar().pushMessage(
-            u"Remonter le temps",
-            u"%d cliche(s) cale(s)." % len(task.results),
+            u"Remonter le temps", u"%d cliche(s) cale(s)." % len(task.results),
             level=Qgis.Success, duration=6)
 
-    def _failed(self, task):
-        self._busy(False)
-        msg = task.error or u"Tache annulee."
-        self.say(u"ERREUR : %s" % msg)
-
-    def _start(self, task):
-        self._busy(True)
-        self.progress.setValue(0)
-        self._task = task
-        QgsApplication.taskManager().addTask(task)
+    # ------------------------------------------------------------- fermeture
+    def closeEvent(self, event):
+        if self.btn_rect.isChecked():
+            self.toggle_rect_tool(False)
+        QDockWidget.closeEvent(self, event)

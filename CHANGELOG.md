@@ -3,6 +3,21 @@
 Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/) et le
 versionnement sémantique.
 
+## [1.1.0] - 2026-08-11
+
+### Ajouté
+- Onglets Recherche / Panier / Traitement.
+- Outil « Tracer un rectangle » pour remplir le panier depuis la carte
+  (interroge le WFS si aucune couche de clichés n'est chargée).
+- Panier arborescent Année → Mission → Cliché, cases à cocher en cascade,
+  légende affichant le centre et l'angle d'orientation, infobulle listant
+  toutes les métadonnées du WFS.
+- Aperçu d'un cliché (calage niveau 1), curseur d'opacité et bascule 180°.
+- Boutons « Nettoyer décochés » et « Vider ».
+- Export d'un fichier `.json` de métadonnées à côté de chaque scan.
+- Champs des couches mémoire déduits dynamiquement des attributs WFS.
+- Compatibilité PyQt5 / PyQt6 (`compat.py`).
+
 ## [1.0.0] - 2026-08-10
 
 ### Ajouté

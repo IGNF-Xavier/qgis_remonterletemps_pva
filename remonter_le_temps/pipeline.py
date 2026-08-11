@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Chaine de traitement d'un cliche : telechargement -> decoupe -> calage."""
 
+import json
 import math
 import os
 
@@ -34,6 +35,7 @@ class Options(object):
         self.overwrite = False
         self.rotation_steps = 0      # calage sur emprise uniquement
         self.build_ovr = True
+        self.write_json = True
 
 
 def _log(feedback, msg):
@@ -91,6 +93,17 @@ def process_cliche(props, ring3857, opt, feedback=None, is_canceled=None):
     # ---- 1. telechargement --------------------------------------------
     _log(feedback, u"  telechargement du scan...")
     raw = ign_api.download_cliche(ds_id, img_id, raw_dir, overwrite=opt.overwrite)
+
+    if opt.write_json:
+        meta = dict(props)
+        meta["_emprise_wfs_epsg3857"] = [list(p) for p in ring3857]
+        meta["_scan"] = os.path.basename(raw)
+        meta["_source"] = ign_api.DOWNLOAD_URL.format(
+            ds=ds_id, img=img_id, ext=os.path.splitext(raw)[1])
+        with open(os.path.join(raw_dir, "%s.json" % img_id), "w",
+                  encoding="utf-8") as fh:
+            json.dump(meta, fh, ensure_ascii=False, indent=2, default=str)
+
     if is_canceled and is_canceled():
         return None
 

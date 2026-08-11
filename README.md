@@ -66,19 +66,31 @@ ont des dépendances lourdes.
 
 ## Utilisation
 
+L'interface est en trois onglets : **Recherche**, **Panier**, **Traitement**.
+
 1. Zoomer sur la zone voulue.
-2. **Charger les missions (emprise carte)** avec une plage d'années → couche
-   orange `PVA – Missions`.
-3. Sélectionner une mission dans cette couche, puis **Charger les clichés** →
-   couche bleue `PVA – Clichés`, c'est le tableau d'assemblage.
-4. Sélectionner les clichés voulus (sélection rectangulaire, par attribut…).
-5. Choisir le mode de découpe, le niveau de calage, le CRS, le dossier de
-   sortie → **Traiter les clichés sélectionnés**.
+2. **Scanner l'emprise actuelle** avec une plage d'années → couche orange
+   `PVA – Missions`, et la liste déroulante des missions se remplit.
+3. Choisir une mission → **Charger les clichés** → couche bleue
+   `PVA – Clichés`, c'est le tableau d'assemblage.
+4. **Tracer un rectangle** sur la carte : les clichés couvrant la zone
+   partent dans le panier. Si aucune couche n'est chargée, le rectangle
+   interroge directement le WFS.
+5. Dans l'onglet **Panier**, l'arborescence groupe par année puis par mission.
+   Chaque cliché affiche les coordonnées de son centre et son angle
+   d'orientation ; l'infobulle donne toutes les métadonnées du WFS. Décocher
+   ce qui ne sert pas, puis **Nettoyer décochés**.
+6. **Aperçu du cliché** télécharge le scan et l'affiche avec un calage rapide
+   (niveau 1). Le curseur d'opacité et la case *180°* permettent de le
+   comparer au fond de carte — les scans IGN sont souvent tête-bêche par
+   rapport à leur emprise.
+7. Onglet **Traitement** : mode de découpe, niveau de calage, CRS, résolution,
+   dossier de sortie → **Télécharger et traiter les clichés cochés**.
 
 Sortie :
 
 ```
-<dossier>/01_scans_bruts/       scans .tif d'origine
+<dossier>/01_scans_bruts/       scans .tif d'origine + métadonnées .json
 <dossier>/02_cliches_decoupes/  clichés sans cadre
 <dossier>/03_cliches_cales/     GeoTIFF calés (…_cale.tif / …_ortho.tif)
 ```
