@@ -185,6 +185,30 @@ plaine.
 - Les scans font couramment 100 à 500 Mo une fois décompressés : prévoir la
   place disque et traiter par lots raisonnables.
 
+## Dépannage
+
+**`AttributeError: 'NoneType' object has no attribute 'write'`** — sous Windows,
+QGIS démarre sans console : `sys.stderr` vaut `None`, et la bibliothèque qui
+essayait d'afficher un avertissement échoue à l'écrire. Le message que vous
+voyez n'est donc pas la cause, seulement le symptôme. Depuis la 1.3.1 le plugin
+redirige ces flux vers le journal des messages de QGIS (*Vue → Panneaux →
+Journal des messages*, onglet « Remonter le temps »), où le message réel
+s'affiche.
+
+La cause la plus fréquente est **deux copies de numpy** : celle de QGIS et une
+autre installée dans le site utilisateur
+(`%AppData%\Roaming\Python\Python3xx\site-packages`), qui passe en premier
+sur `sys.path`. Une extension C compilée contre l'une et exécutée avec l'autre
+déclenche exactement ce message. Le bouton **Diagnostic** du panneau les liste.
+Pour corriger, depuis l'*OSGeo4W Shell* :
+
+```
+python -m pip uninstall numpy          # retire la copie du site utilisateur
+python -c "import numpy; print(numpy.__version__, numpy.__file__)"
+```
+
+Le chemin affiché doit pointer dans l'installation QGIS, pas dans `Roaming`.
+
 ## Licence des données
 
 Photographies aériennes IGN : licence ouverte / réutilisation libre, mention

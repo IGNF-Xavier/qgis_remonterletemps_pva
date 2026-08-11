@@ -3,6 +3,23 @@
 Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/) et le
 versionnement sémantique.
 
+## [1.3.1] - 2026-08-11
+
+### Corrigé
+- `sys.stdout` / `sys.stderr` valant `None` sous Windows (QGIS démarre sans
+  console) sont remplacés par un flux qui écrit dans le journal des messages.
+  Sans cela, toute bibliothèque tentant d'émettre un avertissement provoquait
+  `AttributeError: 'NoneType' object has no attribute 'write'`, en masquant le
+  message d'origine.
+- `libs/` est ajouté en **fin** de `sys.path` et non plus en tête, pour ne
+  jamais masquer les paquets de QGIS (numpy en particulier).
+- L'installation d'OpenCV utilise `--no-deps` et `PYTHONNOUSERSITE=1` : pip
+  n'installe plus sa propre copie de numpy à côté de celle de QGIS.
+
+### Ajouté
+- Bouton **Diagnostic** : liste les copies de numpy présentes sur `sys.path`,
+  le contenu de `libs/`, l'emplacement de cv2 et du site utilisateur.
+
 ## [1.3.0] - 2026-08-11
 
 ### Documentation

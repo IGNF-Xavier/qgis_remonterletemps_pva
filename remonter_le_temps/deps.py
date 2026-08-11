@@ -25,10 +25,68 @@ LIBS_DIR = os.path.join(PLUGIN_DIR, "libs")
 PACKAGE = "opencv-python-headless"
 
 
+class _LogSink(object):
+    """Remplace un flux standard absent : sous Windows, QGIS demarre sans
+    console et sys.stderr vaut None. Toute bibliotheque qui tente d'ecrire un
+    avertissement leve alors AttributeError: 'NoneType' has no attribute
+    'write', ce qui masque completement le message d'origine."""
+
+    def __init__(self, tag):
+        self.tag = tag
+        self._buffer = ""
+
+    def write(self, text):
+        try:
+            self._buffer += text
+            while "\n" in self._buffer:
+                line, self._buffer = self._buffer.split("\n", 1)
+                if line.strip():
+                    _log_line(line, self.tag)
+        except Exception:  # noqa: BLE001
+            pass
+        return len(text or "")
+
+    def flush(self):
+        if self._buffer.strip():
+            _log_line(self._buffer, self.tag)
+        self._buffer = ""
+
+    def isatty(self):
+        return False
+
+    def fileno(self):
+        raise OSError("flux virtuel")
+
+
+def _log_line(line, tag):
+    try:
+        from qgis.core import Qgis, QgsMessageLog
+        level = Qgis.Warning if tag == "stderr" else Qgis.Info
+        QgsMessageLog.logMessage(line, "Remonter le temps", level)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def ensure_stdio():
+    """Garantit que sys.stdout / sys.stderr sont ecrivables."""
+    for name in ("stdout", "stderr"):
+        stream = getattr(sys, name, None)
+        if stream is None or not hasattr(stream, "write"):
+            setattr(sys, name, _LogSink(name))
+
+
 def ensure_path():
-    """A appeler tres tot : rend les paquets locaux importables."""
+    """
+    Rend les paquets locaux importables.
+
+    Le dossier est ajoute en FIN de sys.path, jamais au debut : s'il contenait
+    par accident une copie de numpy, la placer en tete masquerait celle de
+    QGIS et provoquerait un conflit d'ABI avec les extensions C compilees
+    contre elle (GDAL, scipy...).
+    """
+    ensure_stdio()
     if os.path.isdir(LIBS_DIR) and LIBS_DIR not in sys.path:
-        sys.path.insert(0, LIBS_DIR)
+        sys.path.append(LIBS_DIR)
 
 
 def have_cv2():
@@ -85,8 +143,11 @@ def _python_candidates():
 def _run(cmd, feedback):
     if feedback:
         feedback(u"  $ " + u" ".join(cmd))
+    env = dict(os.environ)
+    env["PYTHONNOUSERSITE"] = "1"      # n'ecrit jamais dans le site utilisateur
+    env.pop("PIP_USER", None)
     kwargs = dict(stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                  universal_newlines=True)
+                  universal_newlines=True, env=env)
     if os.name == "nt":
         si = subprocess.STARTUPINFO()
         si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
@@ -108,8 +169,11 @@ def install_opencv(feedback=None, package=PACKAGE):
     N'ecrit rien en dehors du dossier de l'extension.
     """
     os.makedirs(LIBS_DIR, exist_ok=True)
+    # --no-deps est essentiel : sans lui, pip installe SA version de numpy a
+    # cote d'OpenCV, qui entre alors en conflit avec celle de QGIS.
     args = ["-m", "pip", "install", "--upgrade", "--target", LIBS_DIR,
-            "--only-binary=:all:", package]
+            "--only-binary=:all:", "--no-deps", "--no-input",
+            "--disable-pip-version-check", package]
 
     errors = []
     for exe in _python_candidates():
@@ -158,3 +222,72 @@ def _purge_import_cache():
     importlib.invalidate_caches()
     for mod in [m for m in sys.modules if m == "cv2" or m.startswith("cv2.")]:
         sys.modules.pop(mod, None)
+
+
+# --------------------------------------------------------------------------
+# diagnostic
+# --------------------------------------------------------------------------
+def _module_locations(name):
+    """Toutes les copies d'un module presentes sur sys.path, dans l'ordre."""
+    found = []
+    for entry in sys.path:
+        if not entry:
+            entry = os.getcwd()
+        for candidate in (os.path.join(entry, name, "__init__.py"),
+                          os.path.join(entry, name + ".py")):
+            if os.path.exists(candidate):
+                path = os.path.dirname(candidate)
+                if path not in found:
+                    found.append(path)
+                break
+    return found
+
+
+def diagnose():
+    """Rapport lisible sur l'environnement Python, pour le journal du panneau."""
+    lines = [u"--- Diagnostic de l'environnement ---",
+             u"Python   : %s" % sys.version.split()[0],
+             u"Executable : %s" % (sys.executable or u"inconnu"),
+             u"stdout/stderr : %s / %s"
+             % (type(sys.stdout).__name__, type(sys.stderr).__name__)]
+
+    numpys = _module_locations("numpy")
+    lines.append(u"numpy : %d copie(s) sur sys.path" % len(numpys))
+    for path in numpys:
+        lines.append(u"   %s" % path)
+    if len(numpys) > 1:
+        lines.append(u"   ! Plusieurs numpy : c'est la cause classique de "
+                     u"l'erreur \"NoneType has no attribute 'write'\". "
+                     u"Supprimez celui qui n'est pas fourni par QGIS.")
+    try:
+        import numpy
+        lines.append(u"numpy actif : %s (%s)"
+                     % (numpy.__version__, os.path.dirname(numpy.__file__)))
+    except Exception as exc:  # noqa: BLE001
+        lines.append(u"numpy inutilisable : %s" % exc)
+
+    if os.path.isdir(LIBS_DIR):
+        content = sorted(n for n in os.listdir(LIBS_DIR)
+                         if not n.endswith(("dist-info", ".pyc")))
+        lines.append(u"libs/ : %s" % (u", ".join(content) or u"vide"))
+        if any(n == "numpy" for n in content):
+            lines.append(u"   ! numpy est present dans libs/ alors qu'il ne "
+                         u"devrait pas. Cliquez sur Retirer, puis "
+                         u"reinstallez OpenCV.")
+    else:
+        lines.append(u"libs/ : absent")
+
+    for name in ("cv2", "osgeo"):
+        locs = _module_locations(name)
+        lines.append(u"%s : %s" % (name, locs[0] if locs else u"absent"))
+
+    user_site = [p for p in sys.path
+                 if "Roaming" in p and "site-packages" in p]
+    if user_site:
+        lines.append(u"Site utilisateur present sur sys.path :")
+        for path in user_site:
+            lines.append(u"   %s" % path)
+        lines.append(u"   Tout paquet installe la prend le pas sur celui de "
+                     u"QGIS. En cas de doute : pip uninstall numpy, ou "
+                     u"suppression manuelle du dossier numpy qui s'y trouve.")
+    return u"\n".join(lines)

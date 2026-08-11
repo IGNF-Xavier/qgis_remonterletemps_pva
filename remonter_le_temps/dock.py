@@ -212,6 +212,11 @@ class RltDock(QDockWidget):
         self.btn_uninstall = QPushButton(u"Retirer")
         self.btn_uninstall.clicked.connect(self.uninstall_opencv)
         hdep.addWidget(self.btn_uninstall)
+        self.btn_diag = QPushButton(u"Diagnostic")
+        self.btn_diag.setToolTip(u"Verifie l'environnement Python : doublons de "
+                                 u"numpy, site utilisateur, flux standards.")
+        self.btn_diag.clicked.connect(self.run_diagnostic)
+        hdep.addWidget(self.btn_diag)
         vdep.addLayout(hdep)
         lay.addWidget(gdep)
 
@@ -403,6 +408,10 @@ class RltDock(QDockWidget):
         self.iface.messageBar().pushMessage(
             u"Remonter le temps", task.detail.splitlines()[0],
             level=Qgis.Success if task.ok else Qgis.Warning, duration=8)
+
+    def run_diagnostic(self):
+        self.say(deps.diagnose())
+        self.tabs.setCurrentIndex(0)
 
     def uninstall_opencv(self):
         deps.uninstall_opencv()
