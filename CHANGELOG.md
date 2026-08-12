@@ -3,6 +3,19 @@
 Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/) et le
 versionnement sémantique.
 
+## [1.10.0] - 2026-08-12
+
+### Modifié
+- **Les onglets Panier et Traitement fusionnent** en un seul, « Panier et
+  traitement » : on cochait les clichés dans l'un pour valider leur traitement
+  dans l'autre, sans jamais voir les deux ensemble. Les réglages de traitement
+  sont désormais sous le panier, dans un bloc dépliable, et le bouton de
+  lancement est toujours visible.
+- Le bouton de traitement indique en continu le nombre de clichés cochés et se
+  désactive quand il n'y en a aucun.
+- Libellés clarifiés entre les réglages propres à un cliché (rotation, miroir)
+  et leurs équivalents globaux appliqués à toute la sélection.
+
 ## [1.9.0] - 2026-08-12
 
 ### Ajouté

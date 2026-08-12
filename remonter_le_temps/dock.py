@@ -11,8 +11,8 @@ from qgis.PyQt.QtGui import QColor, QDesktopServices
 from qgis.PyQt.QtWidgets import (
     QCheckBox, QComboBox, QDockWidget, QDoubleSpinBox, QFormLayout, QGroupBox,
     QHBoxLayout, QLabel, QMessageBox, QProgressBar, QPlainTextEdit,
-    QPushButton, QSlider, QSpinBox, QTabWidget, QTreeWidget, QTreeWidgetItem,
-    QVBoxLayout, QWidget)
+    QPushButton, QScrollArea, QSlider, QSpinBox, QTabWidget, QTreeWidget,
+    QTreeWidgetItem, QVBoxLayout, QWidget)
 
 from qgis.core import (
     Qgis, QgsCoordinateReferenceSystem, QgsCoordinateTransform, QgsFeature,
@@ -194,8 +194,7 @@ class RltDock(QDockWidget):
 
         self.tabs = QTabWidget()
         self.tabs.addTab(self._tab_search(), u"Recherche")
-        self.tabs.addTab(self._tab_basket(), u"Panier")
-        self.tabs.addTab(self._tab_process(), u"Traitement")
+        self.tabs.addTab(self._tab_basket(), u"Panier et traitement")
         lay.addWidget(self.tabs, 1)
 
         self.progress = QProgressBar()
@@ -305,7 +304,7 @@ class RltDock(QDockWidget):
         lay.addWidget(self.tree, 1)
 
         h1 = QHBoxLayout()
-        self.btn_preview = QPushButton(u"Apercu du cliche")
+        self.btn_preview = QPushButton(u"Apercu du cliche selectionne")
         self.btn_preview.clicked.connect(self.preview_current)
         h1.addWidget(self.btn_preview)
         self.btn_clean = QPushButton(u"Nettoyer decoches")
@@ -344,11 +343,47 @@ class RltDock(QDockWidget):
         self.chk_mirror.toggled.connect(self._orientation_changed)
         h2.addWidget(self.chk_mirror)
         lay.addLayout(h2)
+
+        # Les reglages de traitement vivent sous le panier : on coche des
+        # cliches et on lance leur traitement sans changer d'onglet.
+        box = QGroupBox(u"Traitement des cliches coches")
+        box.setCheckable(True)
+        box.setChecked(False)
+        box.setToolTip(u"Depliez pour ajuster decoupe, calage et sortie.")
+        form = self._process_form()
+        box.setLayout(form)
+        for i in range(form.count()):
+            widget = form.itemAt(i).widget()
+            if widget is not None:
+                widget.setVisible(False)
+        box.toggled.connect(lambda on, f=form: self._toggle_form(f, on))
+        self._process_box = box
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.NoFrame)
+        holder = QWidget()
+        vh = QVBoxLayout(holder)
+        vh.setContentsMargins(0, 0, 0, 0)
+        vh.addWidget(box)
+        scroll.setWidget(holder)
+        lay.addWidget(scroll)
+
+        self.btn_run = QPushButton(u"Telecharger et traiter les cliches coches")
+        self.btn_run.clicked.connect(self.run_processing)
+        lay.addWidget(self.btn_run)
         return page
 
-    def _tab_process(self):
-        page = QWidget()
-        f2 = QFormLayout(page)
+    @staticmethod
+    def _toggle_form(form, visible):
+        for i in range(form.count()):
+            widget = form.itemAt(i).widget()
+            if widget is not None:
+                widget.setVisible(visible)
+
+    def _process_form(self):
+        """Reglages de traitement, integres sous le panier."""
+        f2 = QFormLayout()
 
         self.cmb_crop = QComboBox()
         self.cmb_crop.addItems([u"Aucune",
@@ -409,11 +444,13 @@ class RltDock(QDockWidget):
         self.cmb_extra = QComboBox()
         self.cmb_extra.addItems([u"0 deg", u"90 deg", u"180 deg", u"270 deg"])
         self.cmb_extra.setToolTip(
-            u"Correction appliquee a TOUS les cliches. Elle s'ajoute a la "
-            u"rotation propre a chaque cliche, reglee dans le panier.")
-        f2.addRow(u"Correction de rotation (globale)", self.cmb_extra)
+            u"Correction appliquee a TOUS les cliches coches, en plus de la "
+            u"rotation propre a chacun reglee juste au-dessus. Utile quand "
+            u"toute une mission est de travers de la meme facon.")
+        f2.addRow(u"Rotation : correction globale", self.cmb_extra)
 
-        self.chk_mirror_run = QCheckBox(u"Scan en miroir (cote emulsion)")
+        self.chk_mirror_run = QCheckBox(
+            u"Miroir sur tous les cliches (cote emulsion)")
         f2.addRow(self.chk_mirror_run)
 
         self.out_dir = QgsFileWidget()
@@ -427,11 +464,7 @@ class RltDock(QDockWidget):
         self.chk_add = QCheckBox(u"Ajouter les resultats au projet")
         self.chk_add.setChecked(True)
         f2.addRow(self.chk_add)
-
-        self.btn_run = QPushButton(u"Telecharger et traiter les cliches coches")
-        self.btn_run.clicked.connect(self.run_processing)
-        f2.addRow(self.btn_run)
-        return page
+        return f2
 
     # --------------------------------------------------------- dependances
     def refresh_deps(self):
@@ -1037,11 +1070,23 @@ class RltDock(QDockWidget):
 
         self.tree.blockSignals(False)
         self.tree.setHeaderLabels([u"Panier (%d cliches)" % len(self._basket)])
+        self._refresh_run_button()
 
     def _item_changed(self, item, _column):
         ident = item.data(0, USER_ROLE)
         if ident and ident in self._basket:
             self._basket[ident]["checked"] = item.checkState(0) == CHECKED
+        self._refresh_run_button()
+
+    def _refresh_run_button(self):
+        """Le bouton annonce combien de cliches seront traites."""
+        if not hasattr(self, "btn_run"):
+            return
+        count = sum(1 for v in self._basket.values() if v.get("checked"))
+        self.btn_run.setText(
+            u"Telecharger et traiter %d cliche(s) coche(s)" % count
+            if count else u"Aucun cliche coche")
+        self.btn_run.setEnabled(count > 0)
 
     def _sync_orientation_widgets(self, *_args):
         """Recharge rotation et miroir du cliche courant dans les widgets."""
@@ -1212,6 +1257,10 @@ class RltDock(QDockWidget):
 
     # ------------------------------------------------------------ traitement
     def _options(self, outdir):
+        # le formulaire est construit avec le panier : s'il manquait, mieux
+        # vaut un message clair qu'un AttributeError
+        if not hasattr(self, "cmb_level"):
+            raise RuntimeError(u"Panneau de traitement non initialise.")
         opt = pipeline.Options()
         opt.outdir = outdir
         opt.out_crs = self.crs_widget.crs().authid() or "EPSG:2154"

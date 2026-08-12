@@ -84,7 +84,8 @@ ont des dépendances lourdes.
 
 ## Utilisation
 
-L'interface est en trois onglets : **Recherche**, **Panier**, **Traitement**.
+L'interface est en deux onglets : **Recherche**, puis **Panier et
+traitement** — les clichés se cochent et se traitent au même endroit.
 
 1. Zoomer sur la zone voulue.
 2. **Scanner l'emprise actuelle** avec une plage d'années → couche orange
@@ -112,8 +113,9 @@ L'interface est en trois onglets : **Recherche**, **Panier**, **Traitement**.
    retélécharger, et le réglage est mémorisé pour le traitement. L'orientation
    varie d'un cliché à l'autre au sein d'une même mission, chaque entrée garde
    donc la sienne.
-8. Onglet **Traitement** : mode de découpe, niveau de calage, CRS, résolution,
-   dossier de sortie → **Télécharger et traiter les clichés cochés**.
+8. Sous le panier, déplier **Traitement des clichés cochés** pour régler mode
+   de découpe, niveau de calage, CRS, résolution et dossier de sortie, puis
+   lancer le traitement — le bouton indique combien de clichés sont cochés.
 
 Dans le gestionnaire de couches, tout est rangé sous un groupe
 **Remonter le Temps**, avec un sous-groupe par mission : l'emprise, le tableau
