@@ -180,6 +180,7 @@ class RltDock(QDockWidget):
         self._task = None
         self._basket = {}          # ident -> {"props":..., "ring":...}
         self._missions = {}        # dataset_identifier -> entite GeoJSON
+        self._cliches_layer_id = None   # couche de cliches active
         self._previews = {}        # ident -> id de couche raster
         self._rect_tool = None
         self._prev_tool = None
@@ -493,6 +494,21 @@ class RltDock(QDockWidget):
 
     # ------------------------------------------------------- couches memoire
     @staticmethod
+    def _ring_of_geometry(geom):
+        """Anneau exterieur d'une geometrie QGIS, polygone ou multipolygone."""
+        if geom is None or geom.isEmpty():
+            return None
+        poly = geom.asPolygon()
+        if not poly:
+            multi = geom.asMultiPolygon()
+            if not multi:
+                return None
+            poly = multi[0]
+        if not poly:
+            return None
+        return [(p.x(), p.y()) for p in poly[0]]
+
+    @staticmethod
     def _ring_of(gj):
         geom = gj.get("geometry") or {}
         coords = geom.get("coordinates")
@@ -606,11 +622,25 @@ class RltDock(QDockWidget):
             return None
 
     def _find_layer(self, rlt_type):
+        """
+        Couche de travail pour un type donne.
+
+        Depuis le regroupement par mission, plusieurs couches de cliches
+        coexistent : prendre la premiere venue selectionnerait celle d'une
+        autre mission, geographiquement ailleurs, et la selection ne
+        retournerait rien. On privilegie donc la derniere chargee, puis la
+        couche active.
+        """
+        project = QgsProject.instance()
+        if rlt_type == "cliches" and self._cliches_layer_id:
+            layer = project.mapLayer(self._cliches_layer_id)
+            if layer is not None:
+                return layer
         cur = self.iface.activeLayer()
         if (isinstance(cur, QgsVectorLayer) and
                 cur.customProperty("rlt_type") == rlt_type):
             return cur
-        for lyr in QgsProject.instance().mapLayers().values():
+        for lyr in project.mapLayers().values():
             if lyr.customProperty("rlt_type") == rlt_type:
                 return lyr
         return None
@@ -754,8 +784,10 @@ class RltDock(QDockWidget):
         if not feats:
             self.say(u"Aucun cliche trouve.")
             return
-        self._make_layer(u"PVA - Cliches %s" % (dataset or u"emprise"),
-                         feats, "0,120,255,255", "cliches", mission=dataset)
+        layer = self._make_layer(u"PVA - Cliches %s" % (dataset or u"emprise"),
+                                 feats, "0,120,255,255", "cliches",
+                                 mission=dataset)
+        self._cliches_layer_id = layer.id()
         self._make_centres_layer(feats, dataset)
         self.say(u"%d cliche(s) affiche(s). Tracez un rectangle pour remplir "
                  u"le panier." % len(feats))
@@ -791,28 +823,59 @@ class RltDock(QDockWidget):
             return
 
         sel = QgsGeometry.fromRect(QgsRectangle(*bbox))
-        added = 0
+        added, touched, skipped = 0, 0, 0
         for feat in layer.getFeatures():
-            if not feat.geometry().intersects(sel):
+            geom = feat.geometry()
+            if geom is None or not geom.intersects(sel):
+                continue
+            touched += 1
+            ring = self._ring_of_geometry(geom)
+            if ring is None:
+                skipped += 1
                 continue
             props = {f.name(): feat[f.name()] for f in layer.fields()}
-            poly = feat.geometry().asPolygon()
-            if not poly:
+            props = {k: (None if v is None or (hasattr(v, "isNull") and v.isNull())
+                         else v) for k, v in props.items()}
+            if not props.get("image_identifier"):
+                skipped += 1
                 continue
-            ring = [(p.x(), p.y()) for p in poly[0]]
             added += self._add_to_basket(props, ring)
-        self.say(u"%d cliche(s) ajoute(s) au panier." % added)
+
+        if touched == 0:
+            # la couche affichee ne couvre peut-etre pas la zone : on demande
+            # directement au WFS plutot que de laisser l'utilisateur devant un
+            # panier vide sans explication
+            self.say(u"Aucun cliche de la couche \"%s\" dans ce rectangle : "
+                     u"interrogation du WFS..." % layer.name())
+            task = FetchTask("cliches", bbox)
+            task.taskCompleted.connect(lambda: self._rect_from_wfs(task))
+            task.taskTerminated.connect(lambda: self._failed(task))
+            self._start(task)
+            return
+
+        msg = u"%d cliche(s) ajoute(s) au panier" % added
+        if added == 0 and touched:
+            msg += u" (%d deja presents)" % (touched - skipped)
+        if skipped:
+            msg += u" - %d ignore(s) faute d'identifiant ou de geometrie" % skipped
+        self.say(msg + u".")
         self.rebuild_tree()
         self.tabs.setCurrentIndex(1)
 
     def _rect_from_wfs(self, task):
         self._busy(False)
+        feats = task.data.get("features", [])
         added = 0
-        for gj in task.data.get("features", []):
+        for gj in feats:
             ring = self._ring_of(gj)
             if ring:
                 added += self._add_to_basket(self._props_of(gj), ring)
-        self.say(u"%d cliche(s) ajoute(s) au panier." % added)
+        if not feats:
+            self.say(u"Le WFS ne renvoie aucun cliche sur ce rectangle. "
+                     u"Elargissez la zone ou verifiez la periode.")
+            return
+        self.say(u"%d cliche(s) ajoute(s) au panier (sur %d trouve(s))."
+                 % (added, len(feats)))
         self.rebuild_tree()
         self.tabs.setCurrentIndex(1)
 

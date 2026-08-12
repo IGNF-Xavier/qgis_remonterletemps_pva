@@ -3,6 +3,21 @@
 Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/) et le
 versionnement sémantique.
 
+## [1.8.1] - 2026-08-11
+
+### Corrigé
+- **Sélection au rectangle sans effet** : depuis le regroupement par mission,
+  plusieurs couches de clichés coexistent et le plugin interrogeait la
+  première trouvée — souvent celle d'une mission précédente, située
+  ailleurs — d'où un panier vide. La dernière couche chargée est désormais
+  mémorisée et utilisée.
+- Extraction de l'anneau extérieur unifiée et tolérante aux géométries
+  multipolygones, partout où une emprise est lue.
+- Si aucun clichés de la couche ne tombe dans le rectangle, le WFS est
+  interrogé automatiquement au lieu de renvoyer « 0 cliché ajouté ».
+- Messages explicites indiquant combien de clichés étaient déjà au panier ou
+  ont été ignorés faute d'identifiant.
+
 ## [1.8.0] - 2026-08-11
 
 ### Ajouté
