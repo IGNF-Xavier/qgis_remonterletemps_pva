@@ -6,12 +6,13 @@ import json
 import os
 import traceback
 
-from qgis.PyQt.QtCore import QUrl, pyqtSignal
+from qgis.PyQt.QtCore import Qt, QUrl, pyqtSignal
 from qgis.PyQt.QtGui import QColor, QDesktopServices
 from qgis.PyQt.QtWidgets import (
-    QCheckBox, QComboBox, QDockWidget, QDoubleSpinBox, QFormLayout, QGroupBox,
+    QCheckBox, QComboBox, QDockWidget, QDoubleSpinBox, QFileDialog,
+    QFormLayout, QGroupBox,
     QHBoxLayout, QLabel, QMessageBox, QProgressBar, QPlainTextEdit,
-    QPushButton, QScrollArea, QSlider, QSpinBox, QTabWidget, QTreeWidget,
+    QPushButton, QSlider, QSpinBox, QTabWidget, QTreeWidget,
     QTreeWidgetItem, QVBoxLayout, QWidget)
 
 from qgis.core import (
@@ -346,44 +347,42 @@ class RltDock(QDockWidget):
 
         # Les reglages de traitement vivent sous le panier : on coche des
         # cliches et on lance leur traitement sans changer d'onglet.
-        box = QGroupBox(u"Traitement des cliches coches")
-        box.setCheckable(True)
-        box.setChecked(False)
-        box.setToolTip(u"Depliez pour ajuster decoupe, calage et sortie.")
-        form = self._process_form()
-        box.setLayout(form)
-        for i in range(form.count()):
-            widget = form.itemAt(i).widget()
-            if widget is not None:
-                widget.setVisible(False)
-        box.toggled.connect(lambda on, f=form: self._toggle_form(f, on))
-        self._process_box = box
+        # Les reglages sont ranges dans un panneau escamotable place SOUS le
+        # panier. Il est masque d'un bloc (et non widget par widget) pour que
+        # la place soit reellement rendue au panier quand il est replie.
+        self.btn_settings = QPushButton(u"\u25b8  Reglages de traitement")
+        self.btn_settings.setCheckable(True)
+        self.btn_settings.setToolTip(
+            u"Decoupe, niveau de calage, projection, dossier de sortie.")
+        self.btn_settings.toggled.connect(self._toggle_settings)
+        lay.addWidget(self.btn_settings)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QScrollArea.NoFrame)
-        holder = QWidget()
-        vh = QVBoxLayout(holder)
-        vh.setContentsMargins(0, 0, 0, 0)
-        vh.addWidget(box)
-        scroll.setWidget(holder)
-        lay.addWidget(scroll)
+        self.settings_panel = QWidget()
+        self.settings_panel.setLayout(self._process_form())
+        self.settings_panel.setVisible(False)
+        lay.addWidget(self.settings_panel)
 
         self.btn_run = QPushButton(u"Telecharger et traiter les cliches coches")
         self.btn_run.clicked.connect(self.run_processing)
         lay.addWidget(self.btn_run)
         return page
 
-    @staticmethod
-    def _toggle_form(form, visible):
-        for i in range(form.count()):
-            widget = form.itemAt(i).widget()
-            if widget is not None:
-                widget.setVisible(visible)
+    def _toggle_settings(self, checked):
+        self.settings_panel.setVisible(checked)
+        self.btn_settings.setText(
+            (u"\u25be  Reglages de traitement" if checked
+             else u"\u25b8  Reglages de traitement"))
 
     def _process_form(self):
         """Reglages de traitement, integres sous le panier."""
         f2 = QFormLayout()
+        f2.setContentsMargins(4, 4, 4, 4)
+        f2.setLabelAlignment(Qt.AlignLeft)
+        try:
+            f2.setRowWrapPolicy(QFormLayout.WrapLongRows)
+            f2.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        except Exception:  # noqa: BLE001
+            pass
 
         self.cmb_crop = QComboBox()
         self.cmb_crop.addItems([u"Aucune",
@@ -455,6 +454,10 @@ class RltDock(QDockWidget):
 
         self.out_dir = QgsFileWidget()
         self.out_dir.setStorageMode(QgsFileWidget.GetDirectory)
+        try:
+            self.out_dir.setFilePath(self._default_outdir())
+        except Exception:  # noqa: BLE001
+            pass
         f2.addRow(u"Dossier de sortie", self.out_dir)
 
         self.chk_json = QCheckBox(u"Exporter les metadonnees .json")
@@ -1189,11 +1192,8 @@ class RltDock(QDockWidget):
             self._remove_preview(ident)
             self.say(u"Apercu retire : %s" % ident)
             return
-        outdir = self.out_dir.filePath()
+        outdir = self._ensure_outdir()
         if not outdir:
-            QMessageBox.warning(self, u"Sortie",
-                                u"Choisissez un dossier de sortie (onglet "
-                                u"Traitement) : l'apercu telecharge le scan.")
             return
 
         entry = self._basket[ident]
@@ -1256,6 +1256,53 @@ class RltDock(QDockWidget):
             layer.triggerRepaint()
 
     # ------------------------------------------------------------ traitement
+    def _default_outdir(self):
+        base = os.path.join(os.path.expanduser("~"), "Documents")
+        if not os.path.isdir(base):
+            base = os.path.expanduser("~")
+        return os.path.join(base, "RemonterLeTemps")
+
+    def _ensure_outdir(self):
+        """
+        Dossier de sortie, sans imposer de detour par les reglages.
+
+        Un dossier par defaut est propose des le depart ; on ne sollicite
+        l'utilisateur que s'il l'a efface volontairement.
+        """
+        outdir = self.out_dir.filePath()
+        if outdir:
+            try:
+                os.makedirs(outdir, exist_ok=True)
+                return outdir
+            except Exception as exc:  # noqa: BLE001
+                QMessageBox.warning(self, u"Sortie",
+                                    u"Dossier inutilisable :\n%s" % exc)
+                return None
+
+        suggestion = self._default_outdir()
+        rep = QMessageBox.question(
+            self, u"Dossier de sortie",
+            u"Les scans et les cliches cales seront enregistres dans :\n\n%s"
+            u"\n\nUtiliser ce dossier ? (Non : en choisir un autre)"
+            % suggestion, MB_YES | MB_NO | MB_CANCEL)
+        if rep == MB_CANCEL:
+            return None
+        if rep == MB_NO:
+            chosen = QFileDialog.getExistingDirectory(
+                self, u"Dossier de sortie", suggestion)
+            if not chosen:
+                return None
+            suggestion = chosen
+        try:
+            os.makedirs(suggestion, exist_ok=True)
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.warning(self, u"Sortie",
+                                u"Dossier inutilisable :\n%s" % exc)
+            return None
+        self.out_dir.setFilePath(suggestion)
+        self.say(u"Dossier de sortie : %s" % suggestion)
+        return suggestion
+
     def _options(self, outdir):
         # le formulaire est construit avec le panier : s'il manquait, mieux
         # vaut un message clair qu'un AttributeError
@@ -1286,10 +1333,8 @@ class RltDock(QDockWidget):
             QMessageBox.warning(self, u"Panier",
                                 u"Aucun cliche coche dans le panier.")
             return
-        outdir = self.out_dir.filePath()
+        outdir = self._ensure_outdir()
         if not outdir:
-            QMessageBox.warning(self, u"Sortie",
-                                u"Choisissez un dossier de sortie.")
             return
         if len(items) > 30:
             rep = QMessageBox.question(

@@ -131,9 +131,16 @@ def _centre_of(props, ring3857, out_crs):
     return georef.transform_points([centre], "EPSG:3857", out_crs)[0]
 
 
-def _gsd_from_footprint(ground, img_size):
-    """Taille pixel au sol impliquee par l'emprise du tableau d'assemblage."""
-    diag_img = math.hypot(img_size[0], img_size[1])
+def _gsd_from_footprint(ground, full_size):
+    """
+    Taille pixel au sol impliquee par l'emprise du tableau d'assemblage.
+
+    Le calcul porte sur la taille du SCAN COMPLET, pas sur celle du cliche
+    decoupe : le modele metrique exprime les pixels par rapport au centre du
+    scan, et l'emprise IGN decrit le cliche entier. Utiliser la taille apres
+    decoupe surestimerait la taille pixel dans le rapport des deux.
+    """
+    diag_img = math.hypot(full_size[0], full_size[1])
     diag_gnd = max(math.hypot(a[0] - b[0], a[1] - b[1])
                    for a in ground for b in ground)
     if diag_img <= 0 or diag_gnd <= 0:
@@ -159,7 +166,7 @@ def _metric_gcps(props, pitch_m, decim, img_size, full_size, crop_offset,
         # celle qu'implique l'emprise : c'est moins rigoureux, mais on conserve
         # l'essentiel, a savoir le centre et l'angle d'orientation continu,
         # au lieu de retomber sur un ajustement des 4 coins.
-        gsd_from_footprint = _gsd_from_footprint(ground, img_size)
+        gsd_from_footprint = _gsd_from_footprint(ground, full_size)
         if gsd_from_footprint is None:
             _log(feedback, u"  echelle absente et emprise inexploitable")
             return None
@@ -355,6 +362,15 @@ def _preview_warp(props, ring3857, opt, small, img_id, tmp_dir, prev_full,
     return dest
 
 
+def _settings_stamp(opt):
+    """Signature des reglages qui influencent le resultat du calage."""
+    return "|".join(str(v) for v in (
+        opt.out_crs, opt.level, opt.crop_mode, opt.crop_margin,
+        opt.fixed_margin, opt.resolution, opt.rotation_steps,
+        opt.use_metric, opt.use_orientation, opt.invert_orientation,
+        round(float(opt.extra_rotation_deg), 3), bool(opt.mirror)))
+
+
 def process_cliche(props, ring3857, opt, feedback=None, is_canceled=None):
     """
     props    : dict des attributs du cliche (dataset_identifier, image_identifier...)
@@ -372,9 +388,22 @@ def process_cliche(props, ring3857, opt, feedback=None, is_canceled=None):
         os.makedirs(d, exist_ok=True)
 
     dest = os.path.join(out_dir, "%s_cale.tif" % img_id)
+    # Le fichier existant n'est reutilisable que s'il a ete produit avec les
+    # MEMES reglages : sinon un changement de rotation ou de niveau de calage
+    # serait silencieusement ignore.
+    stamp_path = os.path.join(out_dir, "%s_cale.params" % img_id)
+    stamp = _settings_stamp(opt)
     if os.path.exists(dest) and not opt.overwrite:
-        _log(feedback, u"  deja traite, ignore")
-        return dest
+        previous = None
+        try:
+            with open(stamp_path, encoding="utf-8") as fh:
+                previous = fh.read().strip()
+        except Exception:  # noqa: BLE001
+            previous = None
+        if previous == stamp:
+            _log(feedback, u"  deja traite avec les memes reglages, ignore")
+            return _stamp_done()
+        _log(feedback, u"  reglages modifies -> recalcul")
 
     # ---- 1. telechargement --------------------------------------------
     _log(feedback, u"  telechargement du scan...")
@@ -434,10 +463,18 @@ def process_cliche(props, ring3857, opt, feedback=None, is_canceled=None):
         _log(feedback, u"  calage sur l'emprise IGN (%.2f m/px)" % res)
     georef.warp_with_gcps(cropped, dest, gcps, opt.out_crs, opt.out_crs,
                           res=res, order=1)
+    def _stamp_done(path=dest):
+        try:
+            with open(stamp_path, "w", encoding="utf-8") as fh:
+                fh.write(stamp)
+        except Exception:  # noqa: BLE001
+            pass
+        return path
+
     if opt.level == LEVEL_FOOTPRINT:
         if opt.build_ovr:
             georef.build_overviews(dest)
-        return dest
+        return _stamp_done()
 
     # ---- 5. niveau 2 : recalage sur l'ortho actuelle -------------------
     use_cv2 = deps.have_cv2()
@@ -461,7 +498,7 @@ def process_cliche(props, ring3857, opt, feedback=None, is_canceled=None):
         _log(feedback, u"  ! ortho de reference indisponible (%s)" % exc)
         if opt.build_ovr:
             georef.build_overviews(dest)
-        return dest
+        return _stamp_done()
 
     if is_canceled and is_canceled():
         return None
@@ -484,7 +521,7 @@ def process_cliche(props, ring3857, opt, feedback=None, is_canceled=None):
         _log(feedback, u"  ! aucun appariement fiable, calage sur emprise conserve.")
         if opt.build_ovr:
             georef.build_overviews(dest)
-        return dest
+        return _stamp_done()
 
     if use_cv2:
         img_xy, gnd_xy, inliers, steps, det_name, mirror = match
@@ -504,12 +541,12 @@ def process_cliche(props, ring3857, opt, feedback=None, is_canceled=None):
     if opt.level == LEVEL_ORTHO:
         if opt.build_ovr:
             georef.build_overviews(dest)
-        return dest
+        return _stamp_done()
 
     # ---- 6. niveau 3 : orthorectification sur MNT ---------------------
     if len(img_xy) < 6:
         _log(feedback, u"  ! moins de 6 points d'appui : ortho MNT impossible.")
-        return dest
+        return _stamp_done()
 
     _log(feedback, u"  interrogation du RGE ALTI...")
     lonlat = georef.transform_points(gnd_xy, opt.out_crs, "EPSG:4326")
@@ -517,7 +554,7 @@ def process_cliche(props, ring3857, opt, feedback=None, is_canceled=None):
         zs = ign_api.elevations(lonlat)
     except Exception as exc:  # noqa: BLE001
         _log(feedback, u"  ! RGE ALTI indisponible (%s)" % exc)
-        return dest
+        return _stamp_done()
 
     xyz, uv = [], []
     for (X, Y), z, p in zip(gnd_xy, zs, img_xy):
@@ -527,20 +564,20 @@ def process_cliche(props, ring3857, opt, feedback=None, is_canceled=None):
         uv.append(p)
     if len(xyz) < 6:
         _log(feedback, u"  ! altitudes insuffisantes, ortho MNT abandonnee.")
-        return dest
+        return _stamp_done()
 
     try:
         P = georef.solve_dlt(xyz, uv)
     except Exception as exc:  # noqa: BLE001
         _log(feedback, u"  ! resection spatiale impossible (%s)" % exc)
-        return dest
+        return _stamp_done()
 
     resid = georef.dlt_residuals(P, xyz, uv)
     _log(feedback, u"  resection : residu moyen %.1f px (max %.1f px)"
          % (resid.mean(), resid.max()))
     if resid.mean() > 60:
         _log(feedback, u"  ! resection peu fiable, on conserve le calage 2D.")
-        return dest
+        return _stamp_done()
 
     zmed = float(np.median([p[2] for p in xyz]))
     quad = _ground_quad_from_P(P, img_size, zmed)
@@ -557,7 +594,7 @@ def process_cliche(props, ring3857, opt, feedback=None, is_canceled=None):
         ign_api.fetch_dem(bounds, opt.out_crs, dw, dh, dem)
     except Exception as exc:  # noqa: BLE001
         _log(feedback, u"  ! MNT indisponible (%s)" % exc)
-        return dest
+        return _stamp_done()
 
     _log(feedback, u"  orthorectification sur MNT...")
     ortho_dest = os.path.join(out_dir, "%s_ortho.tif" % img_id)
@@ -566,8 +603,8 @@ def process_cliche(props, ring3857, opt, feedback=None, is_canceled=None):
     except Exception as exc:  # noqa: BLE001
         _log(feedback, u"  ! echec de l'orthorectification (%s), calage 2D "
                        u"conserve." % exc)
-        return dest
+        return _stamp_done()
 
     if opt.build_ovr:
         georef.build_overviews(ortho_dest)
-    return ortho_dest
+    return _stamp_done(ortho_dest)

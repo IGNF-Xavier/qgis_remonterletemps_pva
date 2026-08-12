@@ -3,6 +3,26 @@
 Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/) et le
 versionnement sémantique.
 
+## [1.10.1] - 2026-08-12
+
+### Corrigé
+- **La rotation réglée sur l'aperçu n'atteignait pas le cliché traité** : un
+  résultat déjà présent sur le disque était réutilisé tel quel, quels que
+  soient les réglages. Une signature des paramètres est désormais écrite à
+  côté du raster ; tout changement de rotation, de miroir, de découpe ou de
+  niveau de calage déclenche un recalcul.
+- **Échelle de l'aperçu faussée** : l'échelle déduite de l'emprise était
+  calculée sur l'image découpée alors que le modèle métrique situe les pixels
+  par rapport au centre du scan complet, ce qui la surestimait de la largeur
+  du cadre retiré.
+- Message renvoyant à un « onglet Traitement » qui n'existe plus.
+
+### Modifié
+- Dossier de sortie pré-rempli (`~/Documents/RemonterLeTemps`) et créé au
+  besoin : plus de détour obligatoire par les réglages avant un aperçu.
+- Les réglages passent dans un panneau escamotable qui rend réellement la
+  place au panier, sans défilement horizontal ni libellés tronqués.
+
 ## [1.10.0] - 2026-08-12
 
 ### Modifié
