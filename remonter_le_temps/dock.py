@@ -685,7 +685,16 @@ class RltDock(QDockWidget):
             return None
 
     def refresh_target_combo(self):
-        """Recense les couches de cliches presentes dans le projet."""
+        """
+        Recense les couches de cliches presentes dans le projet.
+
+        Robuste a sa propre destruction : reinstaller l'extension laisse les
+        signaux d'une instance precedente connectes pour la duree de la
+        session QGIS, et ceux-ci appellent des widgets deja detruits.
+        """
+        if self._is_dead():
+            self._disconnect_project()
+            return []
         current = self.cmb_target.currentData()
         layers = [l for l in QgsProject.instance().mapLayers().values()
                   if l.customProperty("rlt_type") == "cliches"]
@@ -719,17 +728,30 @@ class RltDock(QDockWidget):
     def _on_project_layers_changed(self, *_args):
         """Le panneau peut avoir ete detruit alors que le signal reste actif."""
         try:
-            import sip
-            if sip.isdeleted(self) or sip.isdeleted(self.cmb_target):
+            if self._is_dead():
                 self._disconnect_project()
                 return
+            self.refresh_target_combo()
+        except RuntimeError:
+            self._disconnect_project()
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _is_dead(self):
+        """Vrai si les widgets Qt sous-jacents ont ete detruits."""
+        try:
+            import sip
+            if sip.isdeleted(self):
+                return True
         except Exception:  # noqa: BLE001
             pass
         try:
-            self.refresh_target_combo()
+            self.cmb_target.count()
+            return False
         except RuntimeError:
-            # widget sous-jacent detruit : on se retire proprement
-            self._disconnect_project()
+            return True
+        except AttributeError:
+            return True
 
     def _disconnect_project(self):
         for signal, slot in getattr(self, "_project_slots", []):

@@ -393,6 +393,16 @@ def process_cliche(props, ring3857, opt, feedback=None, is_canceled=None):
     # serait silencieusement ignore.
     stamp_path = os.path.join(out_dir, "%s_cale.params" % img_id)
     stamp = _settings_stamp(opt)
+
+    def _stamp_done(path=None):
+        """Horodate le resultat avec les reglages utilises, puis le retourne."""
+        try:
+            with open(stamp_path, "w", encoding="utf-8") as fh:
+                fh.write(stamp)
+        except Exception:  # noqa: BLE001
+            pass
+        return path if path is not None else dest
+
     if os.path.exists(dest) and not opt.overwrite:
         previous = None
         try:
@@ -463,14 +473,6 @@ def process_cliche(props, ring3857, opt, feedback=None, is_canceled=None):
         _log(feedback, u"  calage sur l'emprise IGN (%.2f m/px)" % res)
     georef.warp_with_gcps(cropped, dest, gcps, opt.out_crs, opt.out_crs,
                           res=res, order=1)
-    def _stamp_done(path=dest):
-        try:
-            with open(stamp_path, "w", encoding="utf-8") as fh:
-                fh.write(stamp)
-        except Exception:  # noqa: BLE001
-            pass
-        return path
-
     if opt.level == LEVEL_FOOTPRINT:
         if opt.build_ovr:
             georef.build_overviews(dest)

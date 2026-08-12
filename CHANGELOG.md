@@ -3,6 +3,18 @@
 Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/) et le
 versionnement sémantique.
 
+## [1.11.1] - 2026-08-12
+
+### Corrigé
+- **`cannot access local variable '_stamp_done'`** : la fonction qui horodate
+  le résultat était définie après son premier appel, ce qui faisait échouer
+  tout cliché déjà traité. Elle est désormais définie avant tout usage, avec
+  une vérification statique de l'ordre.
+- `RuntimeError: QComboBox has been deleted` persistant après réinstallation :
+  les signaux connectés par une instance précédente survivent à la durée de la
+  session QGIS. Le rafraîchissement se protège maintenant lui-même et se
+  déconnecte dès qu'il constate sa propre destruction.
+
 ## [1.11.0] - 2026-08-12
 
 ### Corrigé
