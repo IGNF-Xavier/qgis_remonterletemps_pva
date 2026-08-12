@@ -10,21 +10,6 @@ scan et calage sur le terrain — jusqu'à l'orthorectification sur MNT.
 
 > ## ⚠️ Statut : expérimental
 >
-> Cette extension n'a **jamais été exécutée dans un vrai QGIS** ni confrontée
-> aux serveurs de l'IGN. Elle a été écrite à partir de la documentation de la
-> Géoplateforme et du code source de [IGNF/Pompei](https://github.com/IGNF/Pompei) ;
-> seules les briques géométriques (ajustement d'emprise, résection spatiale
-> DLT, calage métrique, corrélation de phase) ont été validées numériquement
-> sur des cas synthétiques.
->
-> Attendez-vous à des ajustements au premier lancement, en particulier sur
-> l'interface et sur les noms d'attributs renvoyés par le WFS. Les résultats
-> de calage doivent être **vérifiés visuellement** avant tout usage sérieux :
-> ce plugin ne remplace pas une chaîne photogrammétrique, et aucune de ses
-> sorties ne constitue une mesure opposable. `experimental=True` est
-> positionné dans `metadata.txt`, QGIS affichera donc un avertissement à
-> l'installation.
-
 Charge le **tableau d'assemblage** des photographies aériennes anciennes de l'IGN
 (le même que celui de `remonterletemps.ign.fr`), permet de choisir les clichés,
 puis les télécharge, **découpe le cadre du scan** et les **cale sur le terrain**.
