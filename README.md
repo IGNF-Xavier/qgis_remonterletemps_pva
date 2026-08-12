@@ -47,15 +47,16 @@ Les emprises WFS sont diffusées en EPSG:3857. Aucune clé d'API n'est nécessai
 
 ## Installation
 
-**Depuis une release** : télécharger `remonter_le_temps-<version>.zip`, puis
-QGIS → *Extensions* → *Installer depuis un ZIP*. Le bouton apparaît dans la
-barre d'outils et dans le menu *Raster*.
+**Depuis une release** : télécharger `remonter_le_temps-<version>.zip` depuis
+les [releases GitHub](https://github.com/IGNF-Xavier/qgis_remonterletemps_pva/releases),
+puis QGIS → *Extensions* → *Installer depuis un ZIP*. Le bouton apparaît dans
+la barre d'outils et dans le menu *Raster*.
 
 **Depuis les sources** :
 
 ```bash
-git clone <url-du-depot>
-cd remonter-le-temps-qgis
+git clone https://github.com/IGNF-Xavier/qgis_remonterletemps_pva.git
+cd qgis_remonterletemps_pva
 make zip        # -> dist/remonter_le_temps-<version>.zip
 # ou, pour installer directement dans le profil QGIS :
 make install
