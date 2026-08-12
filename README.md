@@ -174,9 +174,6 @@ plaine.
 
 ## Limites, en toute franchise
 
-- **Aucun test en conditions réelles** : le code n'a pas tourné dans QGIS ni
-  contre les serveurs IGN. Les vérifications faites sont des tests numériques
-  sur données synthétiques, pas des tests d'intégration.
 - Sans OpenCV, l'apparieur de secours ne gère que des translations locales :
   il rattrape un décalage, pas une erreur d'orientation. Si le niveau 1 place
   le cliché avec 90° d'écart, corrigez d'abord avec le champ *Rotation ×90*.
