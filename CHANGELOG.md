@@ -3,6 +3,19 @@
 Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/) et le
 versionnement sémantique.
 
+## [1.9.0] - 2026-08-12
+
+### Ajouté
+- Liste **« Sélection dans »** : la couche interrogée par le rectangle est
+  choisie explicitement, et non plus devinée. Elle prime sur la couche active
+  du gestionnaire de couches, de sorte que ce qui est affiché correspond
+  toujours à ce qui est lu.
+- Activer l'outil rectangle rappelle dans le journal quelle couche sera lue.
+- Sans couche de clichés chargée, une boîte de dialogue explique la marche à
+  suivre et propose d'interroger directement le WFS.
+- La liste se met à jour automatiquement quand des couches sont ajoutées ou
+  supprimées du projet.
+
 ## [1.8.1] - 2026-08-11
 
 ### Corrigé

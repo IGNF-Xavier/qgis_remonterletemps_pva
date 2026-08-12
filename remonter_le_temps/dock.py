@@ -208,6 +208,14 @@ class RltDock(QDockWidget):
 
         self.setWidget(root)
         self.refresh_deps()
+        self.refresh_target_combo()
+        try:
+            QgsProject.instance().layersAdded.connect(
+                lambda *_: self.refresh_target_combo())
+            QgsProject.instance().layersRemoved.connect(
+                lambda *_: self.refresh_target_combo())
+        except Exception:  # noqa: BLE001
+            pass
 
     def _tab_search(self):
         page = QWidget()
@@ -263,10 +271,23 @@ class RltDock(QDockWidget):
         self.btn_cliches_all.clicked.connect(lambda: self.load_cliches(True))
         f1.addRow(self.btn_cliches_all)
 
+        self.cmb_target = QComboBox()
+        self.cmb_target.setToolTip(
+            u"Couche interrogee par la selection au rectangle. Plusieurs "
+            u"missions peuvent etre chargees simultanement : c'est celle-ci "
+            u"qui sera lue, quelle que soit la couche active dans le "
+            u"gestionnaire de couches.")
+        self.cmb_target.currentIndexChanged.connect(self._target_changed)
+        f1.addRow(u"Selection dans", self.cmb_target)
+
         self.btn_rect = QPushButton(u"Tracer un rectangle -> panier")
         self.btn_rect.setCheckable(True)
         self.btn_rect.clicked.connect(self.toggle_rect_tool)
         f1.addRow(self.btn_rect)
+
+        self.lbl_target = QLabel()
+        self.lbl_target.setWordWrap(True)
+        f1.addRow(self.lbl_target)
         lay.addWidget(g1)
 
         lay.addStretch(1)
@@ -621,6 +642,49 @@ class RltDock(QDockWidget):
         except Exception:  # noqa: BLE001
             return None
 
+    def refresh_target_combo(self):
+        """Recense les couches de cliches presentes dans le projet."""
+        current = self.cmb_target.currentData()
+        layers = [l for l in QgsProject.instance().mapLayers().values()
+                  if l.customProperty("rlt_type") == "cliches"]
+        layers.sort(key=lambda l: l.name())
+
+        self._refreshing_target = True
+        try:
+            self.cmb_target.clear()
+            for layer in layers:
+                self.cmb_target.addItem(layer.name(), layer.id())
+            target = current or self._cliches_layer_id
+            index = self.cmb_target.findData(target)
+            if index < 0 and self.cmb_target.count():
+                index = self.cmb_target.count() - 1
+            if index >= 0:
+                self.cmb_target.setCurrentIndex(index)
+                self._cliches_layer_id = self.cmb_target.currentData()
+        finally:
+            self._refreshing_target = False
+
+        if not layers:
+            self.lbl_target.setText(
+                u"<i>Aucune couche de cliches chargee. Scannez l'emprise, "
+                u"choisissez une mission, puis chargez ses cliches : le "
+                u"rectangle interrogera cette couche.</i>")
+            self.btn_rect.setEnabled(True)   # le repli WFS reste possible
+        else:
+            self.lbl_target.setText(u"")
+        return layers
+
+    def _target_changed(self, *_args):
+        if getattr(self, "_refreshing_target", False):
+            return
+        layer_id = self.cmb_target.currentData()
+        if layer_id:
+            self._cliches_layer_id = layer_id
+            layer = QgsProject.instance().mapLayer(layer_id)
+            if layer is not None:
+                self.say(u"Selection au rectangle : couche \"%s\"."
+                         % layer.name())
+
     def _find_layer(self, rlt_type):
         """
         Couche de travail pour un type donne.
@@ -632,10 +696,14 @@ class RltDock(QDockWidget):
         couche active.
         """
         project = QgsProject.instance()
-        if rlt_type == "cliches" and self._cliches_layer_id:
-            layer = project.mapLayer(self._cliches_layer_id)
-            if layer is not None:
-                return layer
+        if rlt_type == "cliches":
+            # le choix explicite du panneau prime sur la couche active : c'est
+            # lui qui est affiche a l'utilisateur, il ne doit pas etre contredit
+            chosen = self.cmb_target.currentData() or self._cliches_layer_id
+            if chosen:
+                layer = project.mapLayer(chosen)
+                if layer is not None:
+                    return layer
         cur = self.iface.activeLayer()
         if (isinstance(cur, QgsVectorLayer) and
                 cur.customProperty("rlt_type") == rlt_type):
@@ -788,6 +856,7 @@ class RltDock(QDockWidget):
                                  feats, "0,120,255,255", "cliches",
                                  mission=dataset)
         self._cliches_layer_id = layer.id()
+        self.refresh_target_combo()
         self._make_centres_layer(feats, dataset)
         self.say(u"%d cliche(s) affiche(s). Tracez un rectangle pour remplir "
                  u"le panier." % len(feats))
@@ -799,6 +868,26 @@ class RltDock(QDockWidget):
             if self._prev_tool is not None:
                 canvas.setMapTool(self._prev_tool)
             return
+
+        layers = self.refresh_target_combo()
+        if not layers:
+            rep = QMessageBox.question(
+                self, u"Aucune couche de cliches",
+                u"Aucune couche de cliches n'est chargee.\n\n"
+                u"Le plus sur est de scanner l'emprise, de choisir une "
+                u"mission, puis de cliquer sur \"Charger les cliches de la "
+                u"mission\" : le rectangle lira cette couche.\n\n"
+                u"Tracer quand meme le rectangle ? Les cliches seront alors "
+                u"demandes directement au WFS, toutes missions confondues.",
+                MB_YES | MB_NO)
+            if rep != MB_YES:
+                self.btn_rect.setChecked(False)
+                return
+        else:
+            layer = QgsProject.instance().mapLayer(self._cliches_layer_id)
+            if layer is not None:
+                self.say(u"Rectangle applique a la couche \"%s\" (modifiable "
+                         u"dans la liste \"Selection dans\")." % layer.name())
         if self._rect_tool is None:
             self._rect_tool = QgsMapToolExtent(canvas)
             self._rect_tool.extentChanged.connect(self._rect_drawn)

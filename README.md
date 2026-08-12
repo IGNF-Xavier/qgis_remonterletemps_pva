@@ -92,8 +92,11 @@ L'interface est en trois onglets : **Recherche**, **Panier**, **Traitement**.
 3. Choisir une mission → **Charger les clichés** → couche bleue
    `PVA – Clichés`, c'est le tableau d'assemblage.
 4. **Tracer un rectangle** sur la carte : les clichés couvrant la zone
-   partent dans le panier. Si aucune couche n'est chargée, le rectangle
-   interroge directement le WFS.
+   partent dans le panier. Plusieurs missions pouvant être chargées en même
+   temps, la liste **« Sélection dans »** indique et permet de choisir la
+   couche qui sera lue — c'est elle qui compte, pas la couche active du
+   gestionnaire de couches. Sans couche chargée, le rectangle interroge
+   directement le WFS.
 5. Dans l'onglet **Panier**, l'arborescence groupe par année puis par mission.
    Chaque cliché affiche les coordonnées de son centre et son angle
    d'orientation ; l'infobulle donne toutes les métadonnées du WFS. Décocher
