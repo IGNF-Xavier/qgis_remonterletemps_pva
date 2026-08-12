@@ -31,6 +31,10 @@ class RltPlugin(object):
 
     def unload(self):
         if self.dock is not None:
+            try:
+                self.dock._disconnect_project()
+            except Exception:  # noqa: BLE001
+                pass
             self.iface.removeDockWidget(self.dock)
             self.dock.deleteLater()
             self.dock = None

@@ -814,3 +814,119 @@ def resolve_north_angle(orientation_deg, img_size, ground_corners_cw):
         return -attr, (u"orientation IGN %.0f deg, convention inversee "
                        u"(ecart %.0f deg)" % (attr, err_inverse))
     return attr, u"orientation IGN %.0f deg (ecart %.0f deg)" % (attr, err_direct)
+
+
+# ==========================================================================
+# recalage sur images pre-alignees (bien plus robuste)
+# ==========================================================================
+def match_calibrated(cale_path, ortho_path, gcps_level1, min_inliers=10,
+                     max_shift_m=None):
+    """
+    Apparie le cliche DEJA CALE au niveau 1 avec l'ortho, sur la meme grille.
+
+    Chercher des correspondances entre un scan brut et une ortho impose au
+    detecteur d'absorber simultanement une rotation quelconque, un facteur
+    d'echelle, cinquante ans de changements urbains et une radiometrie sans
+    rapport : c'est ce qui faisait echouer l'appariement. En partant du calage
+    de niveau 1, les deux images sont deja au meme nord, a la meme resolution
+    et sur la meme emprise ; il ne reste qu'un residu de quelques dizaines de
+    metres, que le detecteur retrouve sans peine.
+
+    Retourne (img_xy, gnd_xy, inliers, 0, nom_detecteur, False) ou None.
+    Les coordonnees image sont exprimees en pixels du cliche d'origine.
+    """
+    import cv2
+
+    src = gdal.Open(cale_path)
+    if src is None:
+        return None
+    gt = src.GetGeoTransform()
+    w, h = src.RasterXSize, src.RasterYSize
+    proj = src.GetProjection()
+    nodata = src.GetRasterBand(1).GetNoDataValue()
+    src = None
+
+    # ortho ramenee exactement sur la grille du cliche cale
+    ref_ds = gdal.Warp("", ortho_path, options=gdal.WarpOptions(
+        format="MEM", dstSRS=proj, xRes=abs(gt[1]), yRes=abs(gt[5]),
+        outputBounds=(gt[0], gt[3] + h * gt[5], gt[0] + w * gt[1], gt[3]),
+        resampleAlg="bilinear"))
+    if ref_ds is None:
+        return None
+
+    def _gray(dataset, max_size=2400):
+        dw, dh = dataset.RasterXSize, dataset.RasterYSize
+        scale = max(1.0, max(dw, dh) / float(max_size))
+        ow, oh = max(1, int(dw / scale)), max(1, int(dh / scale))
+        arr = dataset.GetRasterBand(1).ReadAsArray(0, 0, dw, dh, ow, oh)
+        arr = arr.astype(np.float32)
+        if dataset.RasterCount >= 3:
+            for b in (2, 3):
+                arr += dataset.GetRasterBand(b).ReadAsArray(
+                    0, 0, dw, dh, ow, oh).astype(np.float32)
+            arr /= 3.0
+        lo, hi = np.percentile(arr, (2, 98))
+        if hi <= lo:
+            hi = lo + 1.0
+        out = np.clip((arr - lo) / (hi - lo) * 255.0, 0, 255).astype(np.uint8)
+        return out, dw / float(ow)
+
+    img, step = _gray(gdal.Open(cale_path))
+    ref, _ = _gray(ref_ds)
+    ref_ds = None
+    if img.shape != ref.shape:
+        return None
+
+    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+    img_e = clahe.apply(img)
+    ref_e = clahe.apply(ref)
+
+    det, norm, det_name = make_detector()
+    kp_i, des_i = det.detectAndCompute(img_e, None)
+    kp_r, des_r = det.detectAndCompute(ref_e, None)
+    if des_i is None or des_r is None or len(kp_i) < 20 or len(kp_r) < 20:
+        return None
+
+    bf = cv2.BFMatcher(norm)
+    raw = bf.knnMatch(des_i, des_r, k=2)
+    good = [m for m, n in (p for p in raw if len(p) == 2)
+            if m.distance < 0.8 * n.distance]
+    if len(good) < min_inliers:
+        return None
+
+    src_pts = np.float32([kp_i[m.queryIdx].pt for m in good]).reshape(-1, 1, 2)
+    dst_pts = np.float32([kp_r[m.trainIdx].pt for m in good]).reshape(-1, 1, 2)
+
+    # les images etant deja alignees, le residu est une petite similitude :
+    # un modele affine partiel est plus stable qu'une homographie complete
+    tol_px = 8.0
+    if max_shift_m:
+        tol_px = max(4.0, max_shift_m / (abs(gt[1]) * step))
+    model, mask = cv2.estimateAffinePartial2D(
+        src_pts, dst_pts, method=cv2.RANSAC, ransacReprojThreshold=tol_px,
+        maxIters=5000, confidence=0.995)
+    if model is None or mask is None or int(mask.sum()) < min_inliers:
+        return None
+
+    A_cale, A_inv = affine_from_gcps(gcps_level1)
+
+    img_xy, gnd_xy = [], []
+    for (pt_i, pt_r, keep) in zip(src_pts.reshape(-1, 2),
+                                  dst_pts.reshape(-1, 2), mask.ravel()):
+        if not keep:
+            continue
+        u, v = pt_i[0] * step, pt_i[1] * step
+        ru, rv = pt_r[0] * step, pt_r[1] * step
+        # pixel du cliche cale -> terrain -> pixel du cliche d'origine
+        X = gt[0] + u * gt[1] + v * gt[2]
+        Y = gt[3] + u * gt[4] + v * gt[5]
+        orig = A_inv.dot(np.array([X, Y, 1.0]))
+        # position vraie, lue dans l'ortho
+        Xr = gt[0] + ru * gt[1] + rv * gt[2]
+        Yr = gt[3] + ru * gt[4] + rv * gt[5]
+        img_xy.append((float(orig[0]), float(orig[1])))
+        gnd_xy.append((float(Xr), float(Yr)))
+
+    if len(img_xy) < min_inliers:
+        return None
+    return img_xy, gnd_xy, len(img_xy), 0, det_name, False

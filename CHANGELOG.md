@@ -3,6 +3,28 @@
 Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/) et le
 versionnement sémantique.
 
+## [1.11.0] - 2026-08-12
+
+### Corrigé
+- **`RuntimeError: wrapped C/C++ object of type QComboBox has been deleted`** :
+  les signaux `layersAdded` / `layersRemoved` du projet restaient connectés
+  après la fermeture du panneau et rappelaient des widgets détruits. Ils sont
+  désormais détachés à la fermeture et au déchargement, avec garde-fou si le
+  panneau a déjà disparu.
+
+### Modifié
+- **Recalage repensé.** L'appariement se faisait entre le scan brut et l'ortho,
+  ce qui demandait au détecteur d'absorber d'un coup rotation, échelle,
+  radiométrie et cinquante ans de changements urbains — d'où les échecs
+  systématiques. Il part maintenant du cliché déjà calé au niveau 1 : les deux
+  images sont au même nord, à la même résolution et sur la même emprise, et il
+  ne reste qu'un résidu de quelques dizaines de mètres. Modèle affine partiel
+  plutôt qu'homographie, seuil d'inliers abaissé.
+- Trois stratégies en cascade : images pré-alignées, puis scan brut, puis
+  corrélation de phase.
+- Le journal indique la correction réellement apportée par le recalage, en
+  mètres, pour juger de son utilité.
+
 ## [1.10.1] - 2026-08-12
 
 ### Corrigé

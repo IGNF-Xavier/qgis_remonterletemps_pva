@@ -503,14 +503,21 @@ def process_cliche(props, ring3857, opt, feedback=None, is_canceled=None):
     if is_canceled and is_canceled():
         return None
 
+    match = None
     try:
         if use_cv2:
-            _log(feedback, u"  recherche de points d'appui (%s + RANSAC)..."
-                 % georef.make_detector()[2])
-            match = georef.match_on_ortho(cropped, ortho)
-        else:
-            _log(feedback, u"  recherche de points d'appui (correlation de "
-                           u"phase)...")
+            # 1) images pre-alignees : de loin le plus fiable
+            _log(feedback, u"  recherche de points d'appui (%s sur images "
+                           u"pre-alignees)..." % georef.make_detector()[2])
+            match = georef.match_calibrated(dest, ortho, gcps)
+            # 2) a defaut, appariement direct sur le scan brut
+            if match is None:
+                _log(feedback, u"  aucun appui pre-aligne, essai sur le scan "
+                               u"brut...")
+                match = georef.match_on_ortho(cropped, ortho)
+        # 3) dernier recours, correlation de phase (sans OpenCV ou si echec)
+        if match is None:
+            _log(feedback, u"  essai par correlation de phase...")
             match = georef.match_on_ortho_fft(dest, ortho, gcps)
     except Exception as exc:  # noqa: BLE001
         _log(feedback, u"  ! appariement impossible (%s), calage de niveau 1 "
@@ -523,14 +530,28 @@ def process_cliche(props, ring3857, opt, feedback=None, is_canceled=None):
             georef.build_overviews(dest)
         return _stamp_done()
 
-    if use_cv2:
-        img_xy, gnd_xy, inliers, steps, det_name, mirror = match
+    img_xy, gnd_xy, inliers, steps = match[:4]
+    if len(match) > 4:
+        det_name, mirror = match[4], match[5]
         _log(feedback, u"  %d points d'appui %s (%d inliers, rotation %d deg%s)"
              % (len(img_xy), det_name, inliers, steps * 90,
                 u", scan en miroir" if mirror else u""))
     else:
-        img_xy, gnd_xy, inliers, steps = match[:4]
         _log(feedback, u"  %d points d'appui (tuiles correlees)" % len(img_xy))
+
+    # mesure du deplacement apporte par le recalage : utile pour juger
+    try:
+        A_before, _ = georef.affine_from_gcps(gcps)
+        shifts = []
+        for (px, py), (X, Y) in zip(img_xy, gnd_xy):
+            before = A_before.dot(np.array([px, py, 1.0]))
+            shifts.append(math.hypot(before[0] - X, before[1] - Y))
+        if shifts:
+            _log(feedback, u"  correction apportee : %.0f m en moyenne "
+                           u"(max %.0f m)"
+                 % (sum(shifts) / len(shifts), max(shifts)))
+    except Exception:  # noqa: BLE001
+        pass
 
     order = 2 if len(img_xy) >= 12 else 1
     gcps2 = [gdal.GCP(g[0], g[1], 0.0, p[0], p[1])

@@ -209,11 +209,17 @@ class RltDock(QDockWidget):
         self.setWidget(root)
         self.refresh_deps()
         self.refresh_target_combo()
+        # Les signaux du projet survivent au panneau : sans deconnexion a la
+        # fermeture, ils continuent d'appeler des widgets Qt deja detruits
+        # ("wrapped C/C++ object has been deleted"). On garde donc une
+        # reference aux slots pour pouvoir les detacher dans closeEvent.
+        self._project_slots = []
         try:
-            QgsProject.instance().layersAdded.connect(
-                lambda *_: self.refresh_target_combo())
-            QgsProject.instance().layersRemoved.connect(
-                lambda *_: self.refresh_target_combo())
+            project = QgsProject.instance()
+            for signal in (project.layersAdded, project.layersRemoved):
+                slot = self._on_project_layers_changed
+                signal.connect(slot)
+                self._project_slots.append((signal, slot))
         except Exception:  # noqa: BLE001
             pass
 
@@ -709,6 +715,29 @@ class RltDock(QDockWidget):
         else:
             self.lbl_target.setText(u"")
         return layers
+
+    def _on_project_layers_changed(self, *_args):
+        """Le panneau peut avoir ete detruit alors que le signal reste actif."""
+        try:
+            import sip
+            if sip.isdeleted(self) or sip.isdeleted(self.cmb_target):
+                self._disconnect_project()
+                return
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            self.refresh_target_combo()
+        except RuntimeError:
+            # widget sous-jacent detruit : on se retire proprement
+            self._disconnect_project()
+
+    def _disconnect_project(self):
+        for signal, slot in getattr(self, "_project_slots", []):
+            try:
+                signal.disconnect(slot)
+            except Exception:  # noqa: BLE001
+                pass
+        self._project_slots = []
 
     def _target_changed(self, *_args):
         if getattr(self, "_refreshing_target", False):
@@ -1381,4 +1410,5 @@ class RltDock(QDockWidget):
     def closeEvent(self, event):
         if self.btn_rect.isChecked():
             self.toggle_rect_tool(False)
+        self._disconnect_project()
         QDockWidget.closeEvent(self, event)
