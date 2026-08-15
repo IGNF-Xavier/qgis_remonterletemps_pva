@@ -3,6 +3,15 @@
 Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/) et le
 versionnement sémantique.
 
+## [1.11.2] - 2026-08-15
+
+### Corrigé
+- **`_is_dead()` : `import sip` nu**, qui ne fonctionne que par coincidence
+  sous PyQt5 (un module `sip` autonome doit trainer sur `sys.path`) et ne
+  fonctionne jamais sous PyQt6 (donc QGIS 4.0 a terme), ou `sip` n'existe
+  qu'en tant que `PyQt6.sip`. Remplace par `from qgis.PyQt import sip`, le
+  shim independant de version deja utilise par le reste du plugin.
+
 ## [1.11.1] - 2026-08-12
 
 ### Corrigé

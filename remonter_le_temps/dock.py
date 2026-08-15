@@ -740,7 +740,7 @@ class RltDock(QDockWidget):
     def _is_dead(self):
         """Vrai si les widgets Qt sous-jacents ont ete detruits."""
         try:
-            import sip
+            from qgis.PyQt import sip
             if sip.isdeleted(self):
                 return True
         except Exception:  # noqa: BLE001
